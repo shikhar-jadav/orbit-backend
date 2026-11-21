@@ -1,0 +1,9 @@
+{
+  "name": "pptx",
+  "alias": "ppt",
+  "display_name": "PowerPoint (PPTX) Generator",
+  "description": "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file; editing, modifying, or updating existing presentations; combining or splitting slide files. Triggers on: ppt, pptx, .pptx, presentation, slide, deck, pitch deck.",
+  "enabled": true,
+  "version": "1.0.0",
+  "entry": "SKILL.md"
+}
