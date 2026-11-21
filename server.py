@@ -448,6 +448,7 @@ async def get_index():
 
 
 @app.get("/health")
+@app.get("/health/")
 async def health_check():
     """Health check endpoint."""
     return {
@@ -457,6 +458,7 @@ async def health_check():
 
 
 @app.get("/providers")
+@app.get("/providers/")
 async def get_providers(current_user: Dict[str, Any] = Depends(require_user)):
     """Returns the current round-robin pool status, metrics, and models."""
     if not provider_manager:
@@ -475,6 +477,7 @@ async def get_embeddings_status(current_user: Dict[str, Any] = Depends(require_u
 
 
 @app.get("/threads")
+@app.get("/threads/")
 async def list_threads(current_user: Dict[str, Any] = Depends(require_user)):
     return chat_store.list_threads(user_id=current_user["user_id"])
 
@@ -484,6 +487,7 @@ class ThreadCreateRequest(BaseModel):
 
 
 @app.post("/threads")
+@app.post("/threads/")
 async def create_thread(
     request: Optional[ThreadCreateRequest] = None,
     current_user: Dict[str, Any] = Depends(require_user),
@@ -1293,11 +1297,13 @@ async def delete_thread(thread_id: str, current_user: Dict[str, Any] = Depends(r
 
 
 @app.get("/settings")
+@app.get("/settings/")
 async def get_settings(current_user: Dict[str, Any] = Depends(require_user)):
     return chat_store.get_settings(user_id=current_user["user_id"])
 
 
 @app.put("/settings")
+@app.put("/settings/")
 async def update_settings(
     settings: SettingsUpdate,
     current_user: Dict[str, Any] = Depends(require_user),
@@ -6576,7 +6582,9 @@ class ConnectorToggleRequest(BaseModel):
     enabled: bool = True
 
 @app.get("/marketplace")
+@app.get("/marketplace/")
 @app.get("/api/marketplace")
+@app.get("/api/marketplace/")
 async def get_marketplace_catalog(current_user: Dict[str, Any] = Depends(require_user)):
     """Retrieve full catalog of connectors and modular skills."""
     user_id = current_user["user_id"]
@@ -6671,8 +6679,21 @@ async def toggle_connector_endpoint(
 
 @app.get("/{frontend_path:path}", include_in_schema=False)
 async def serve_frontend(frontend_path: str):
+    normalized = frontend_path.strip("/")
+    if (
+        normalized.startswith("api/")
+        or normalized == "api"
+        or normalized.startswith("auth/")
+        or normalized == "auth"
+        or normalized.startswith("settings/")
+        or normalized == "settings"
+        or normalized.startswith("marketplace")
+        or normalized.startswith("threads")
+        or normalized in {"chat", "threads", "settings", "providers", "health", "ag-ui", "copilotkit", "generative_ui", "a2ui"}
+    ):
+        raise HTTPException(status_code=404, detail=f"API endpoint '/{normalized}' not found.")
     if not FRONTEND_DIST_DIR.exists():
-        raise HTTPException(status_code=404, detail="Frontend build not found.")
+        raise HTTPException(status_code=404, detail="Not found.")
     root = FRONTEND_DIST_DIR.resolve()
     candidate = (root / frontend_path).resolve()
     if root not in candidate.parents and candidate != root:
