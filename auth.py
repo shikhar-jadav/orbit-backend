@@ -17,7 +17,7 @@ import bcrypt
 from fastapi import Depends, HTTPException, Request, Response
 
 COOKIE_NAME = "orbit_session"
-SESSION_TTL_SECONDS = 24 * 60 * 60          # 24 hours
+SESSION_TTL_SECONDS = 30 * 24 * 60 * 60      # 30 days
 REMEMBER_ME_TTL_SECONDS = 30 * 24 * 60 * 60 # 30 days
 OTP_TTL_SECONDS = 10 * 60                   # 10 minutes
 OTP_RESEND_COOLDOWN_SECONDS = 30
@@ -102,7 +102,7 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def compute_session_expiry(remember_me: bool) -> tuple[str, int]:
+def compute_session_expiry(remember_me: bool = True) -> tuple[str, int]:
     ttl = REMEMBER_ME_TTL_SECONDS if remember_me else SESSION_TTL_SECONDS
     expires_dt = datetime.now(timezone.utc) + timedelta(seconds=ttl)
     return expires_dt.isoformat(timespec="seconds"), ttl

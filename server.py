@@ -5962,14 +5962,14 @@ class SignupRequest(BaseModel):
     display_name: Optional[str] = None
     email: str
     password: str
-    remember_me: bool = False
+    remember_me: bool = True
     avatar_color: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
     email: str
     password: str
-    remember_me: bool = False
+    remember_me: bool = True
 
 
 class RecoveryResetRequest(BaseModel):
@@ -6005,7 +6005,7 @@ class AdminUserUpdateRequest(BaseModel):
 
 
 def _issue_session_cookie(
-    request: Request, response: Response, user_id: str, remember_me: bool
+    request: Request, response: Response, user_id: str, remember_me: bool = True
 ) -> Dict[str, Any]:
     raw_token = auth.generate_session_token()
     expires_at, max_age = auth.compute_session_expiry(remember_me)
@@ -6051,7 +6051,7 @@ class OtpRequestPayload(BaseModel):
 class OtpLoginVerifyRequest(BaseModel):
     email: str
     code: str
-    remember_me: bool = False
+    remember_me: bool = True
 
 
 class OtpRecoveryResetRequest(BaseModel):
