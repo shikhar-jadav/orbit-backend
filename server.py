@@ -2996,8 +2996,13 @@ async def incoming_webhook_endpoint(
         payload = {}
     sig = request.headers.get("x-signature") or request.headers.get("webhook-signature")
     ts = request.headers.get("x-timestamp") or request.headers.get("webhook-timestamp")
+    authorization = request.headers.get("authorization")
     res = await proactive_engine.handle_incoming_webhook(
-        token=token, payload=payload, signature=sig, timestamp=ts
+        token=token,
+        payload=payload,
+        signature=sig,
+        timestamp=ts,
+        authorization=authorization,
     )
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
