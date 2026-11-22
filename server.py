@@ -5959,7 +5959,7 @@ async def list_audit_logs_endpoint(
 # Authentication, Account & Session Management Endpoints
 # ------------------------------------------------------------------------------
 class SignupRequest(BaseModel):
-    display_name: str
+    display_name: Optional[str] = None
     email: str
     password: str
     remember_me: bool = False
@@ -6127,8 +6127,14 @@ async def auth_discover(payload: DiscoverEmailRequest, request: Request):
 @app.post("/api/auth/signup")
 async def auth_signup(payload: SignupRequest, request: Request, response: Response):
     try:
-        display_name = auth.validate_display_name(payload.display_name)
         email = auth.validate_email(payload.email)
+        if payload.display_name and payload.display_name.strip():
+            display_name = auth.validate_display_name(payload.display_name)
+        else:
+            # Name is optional at signup; derive a friendly default from the email prefix.
+            email_prefix = email.split("@", 1)[0].split("+", 1)[0]
+            generated_name = email_prefix.replace(".", " ").replace("_", " ").replace("-", " ")
+            display_name = auth.validate_display_name(generated_name[:64].strip() or "Orbit user")
         pw_hash = auth.hash_password(payload.password)
         avatar_color = auth.validate_avatar_color(payload.avatar_color)
     except ValueError as err:
