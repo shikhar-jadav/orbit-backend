@@ -6021,6 +6021,24 @@ def _issue_session_cookie(
     return session
 
 
+def _invalidate_session_cache(token_hash: Optional[str]) -> None:
+    if not token_hash:
+        return
+    from redis_cache import invalidate_session
+    invalidate_session(token_hash)
+
+
+def _invalidate_user_session_caches(
+    user_id: str, except_session_id: Optional[str] = None
+) -> None:
+    """Evict cached credentials before the matching database sessions are revoked."""
+    token_hashes = chat_store.list_unrevoked_session_token_hashes(
+        user_id, except_session_id=except_session_id
+    )
+    for token_hash in token_hashes:
+        _invalidate_session_cache(token_hash)
+
+
 class DiscoverEmailRequest(BaseModel):
     email: str
 
@@ -6193,11 +6211,7 @@ async def auth_logout(request: Request, response: Response):
     if token:
         token_hash = auth.hash_token(token)
         chat_store.revoke_session_by_token_hash(token_hash)
-        try:
-            from redis_cache import invalidate_session
-            invalidate_session(token_hash)
-        except Exception:
-            pass
+        _invalidate_session_cache(token_hash)
     auth.clear_session_cookie(response, request)
     return {"logged_out": True}
 
@@ -6235,6 +6249,7 @@ async def auth_recovery_reset(
 
     login_rate_limiter.reset(rate_key)
     chat_store.update_user_password(cred_row["user_id"], new_hash)
+    _invalidate_user_session_caches(cred_row["user_id"])
     chat_store.revoke_all_sessions(cred_row["user_id"])
     auth.clear_session_cookie(response, request)
     return {"reset": True, "message": "Password updated. Sign in with your new password."}
@@ -6415,6 +6430,7 @@ async def auth_otp_reset_password(
 
     login_rate_limiter.reset(rate_key)
     chat_store.update_user_password(cred_row["user_id"], new_hash)
+    _invalidate_user_session_caches(cred_row["user_id"])
     chat_store.revoke_all_sessions(cred_row["user_id"])
     auth.clear_session_cookie(response, request)
     return {"reset": True, "message": "Password updated. Sign in with your new password."}
@@ -6490,6 +6506,9 @@ async def change_auth_password(
     chat_store.update_user_password(current_user["user_id"], new_hash)
     revoked_count = 0
     if payload.revoke_other_sessions:
+        _invalidate_user_session_caches(
+            current_user["user_id"], except_session_id=current_user.get("session_id")
+        )
         revoked_count = chat_store.revoke_all_sessions(
             current_user["user_id"], except_session_id=current_user.get("session_id")
         )
@@ -6521,9 +6540,11 @@ async def revoke_auth_session(
     response: Response,
     current_user: Dict[str, Any] = Depends(require_user),
 ):
+    token_hash = chat_store.get_session_token_hash(current_user["user_id"], session_id)
     revoked = chat_store.revoke_session(current_user["user_id"], session_id)
     if not revoked:
         raise HTTPException(status_code=404, detail="Session not found.")
+    _invalidate_session_cache(token_hash)
     is_current = session_id == current_user.get("session_id")
     if is_current:
         auth.clear_session_cookie(response, request)
@@ -6539,6 +6560,7 @@ async def auth_logout_all(
     current_user: Dict[str, Any] = Depends(require_user),
 ):
     except_id = current_user.get("session_id") if payload.keep_current else None
+    _invalidate_user_session_caches(current_user["user_id"], except_session_id=except_id)
     count = chat_store.revoke_all_sessions(
         current_user["user_id"], except_session_id=except_id
     )
@@ -6585,6 +6607,7 @@ async def delete_auth_account(
             detail="Promote another user to administrator before deleting the sole admin account.",
         )
 
+    _invalidate_user_session_caches(current_user["user_id"])
     cleanup = chat_store.delete_user(current_user["user_id"])
     _cleanup_thread_assets(cleanup["thread_ids"], cleanup["storage_names"])
     auth.clear_session_cookie(response, request)
