@@ -351,6 +351,15 @@ async def lifespan(app_instance: FastAPI):
     _initialize_application_state()
     start_workspace_watcher()
     GMAIL_WATCH_RENEWAL_TASK = asyncio.create_task(_gmail_watch_renewal_loop())
+
+    # Qdrant is an optional acceleration layer. Warm it after the app can
+    # accept requests so the remote connection cannot delay auth/history APIs.
+    qdrant_init_task = None
+    if memory_store is not None:
+        qdrant_init_task = asyncio.create_task(
+            asyncio.to_thread(memory_store.initialize_qdrant)
+        )
+
     if task_engine:
         task_engine.start()
         print("[INIT] Started DurableExecutionEngine background worker.")
@@ -361,6 +370,11 @@ async def lifespan(app_instance: FastAPI):
     yield
 
     stop_workspace_watcher()
+    if qdrant_init_task is not None:
+        try:
+            await qdrant_init_task
+        except Exception as qdrant_err:
+            print(f"[SHUTDOWN] Qdrant warmup ended with an error: {qdrant_err}")
     if GMAIL_WATCH_RENEWAL_TASK:
         GMAIL_WATCH_RENEWAL_TASK.cancel()
         try:

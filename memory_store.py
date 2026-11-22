@@ -21,6 +21,7 @@ import contextvars
 import json
 import logging
 import os
+from threading import Lock
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Sequence
@@ -71,23 +72,53 @@ class MemoryStoreManager:
         self._dedicated_conn: Optional[psycopg.Connection] = None
         self._is_postgres = False
 
-        # Initialize Qdrant Cloud Vector Store
-        try:
-            from qdrant_vector import QdrantVectorStore
-            self.qdrant_vector: Optional[QdrantVectorStore] = QdrantVectorStore()
-            if self.qdrant_vector.is_ready:
-                print(f"[INIT] Connected to Qdrant Cloud vector store ({self.qdrant_vector.collection_name}).")
-            else:
-                self.qdrant_vector = None
-        except Exception as q_err:
-            logger.debug(f"[MemoryStore] QdrantVectorStore not initialized: {q_err}")
-            self.qdrant_vector = None
+        # Qdrant is an optional search accelerator. Do not connect during
+        # application startup: its remote network handshake can take seconds.
+        # The server lifespan warms it in a background thread after startup.
+        self._qdrant_vector = None
+        self._qdrant_init_attempted = False
+        self._qdrant_init_lock = Lock()
 
         if database is not None:
             self._init_postgres(database, index_config)
         else:
             self.store = InMemoryStore()
             self._is_postgres = False
+
+    @property
+    def qdrant_vector(self):
+        """Lazily initialize the optional Qdrant accelerator on first use."""
+        return self.initialize_qdrant()
+
+    @qdrant_vector.setter
+    def qdrant_vector(self, value):
+        self._qdrant_vector = value
+        self._qdrant_init_attempted = True
+
+    def initialize_qdrant(self):
+        """Connect to Qdrant once; safe to call from a background worker."""
+        if self._qdrant_init_attempted:
+            return self._qdrant_vector
+        with self._qdrant_init_lock:
+            if self._qdrant_init_attempted:
+                return self._qdrant_vector
+            self._qdrant_init_attempted = True
+            try:
+                from qdrant_vector import QdrantVectorStore
+
+                vector_store = QdrantVectorStore()
+                self._qdrant_vector = vector_store if vector_store.is_ready else None
+                if self._qdrant_vector is not None:
+                    print(
+                        f"[INIT] Connected to Qdrant Cloud vector store "
+                        f"({self._qdrant_vector.collection_name})."
+                    )
+            except Exception as q_err:
+                logger.warning(
+                    f"[MemoryStore] Qdrant unavailable; using PostgreSQL/keyword memory search ({q_err})"
+                )
+                self._qdrant_vector = None
+            return self._qdrant_vector
 
     def _init_postgres(self, database: PostgresDatabase, index_config: Optional[Any]) -> None:
         """Initialize PostgresStore with dedicated connection and migrations."""
