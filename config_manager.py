@@ -256,10 +256,16 @@ class RoundRobinProviderManager:
                 headers.setdefault("ngrok-skip-browser-warning", "true")
                 init_kwargs["default_headers"] = headers
 
-            # Ensure Ollama / local inference does not exceed GPU VRAM with huge default context
+        # Ollama-specific options must never be sent to other OpenAI-compatible
+        # providers (for example Mistral), which reject the non-standard field.
+        provider_hint = f"{provider.name} {provider.base_url or ''}".lower()
+        is_ollama = (
+            "ollama" in provider_hint
+            or (provider.base_url is not None and ":11434" in provider.base_url.lower())
+        )
+        if is_ollama:
             extra_body = dict(init_kwargs.get("extra_body") or {})
-            if "options" not in extra_body:
-                extra_body["options"] = {"num_ctx": 8192}
+            extra_body.setdefault("options", {"num_ctx": 8192})
             init_kwargs["extra_body"] = extra_body
 
         return ChatOpenAI(**init_kwargs)
