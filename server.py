@@ -3298,6 +3298,7 @@ async def event_integration_status_endpoint(
                 and os.getenv("GMAIL_PUBSUB_AUDIENCE", "").strip()
                 and os.getenv("GMAIL_PUBSUB_PUSH_EMAIL", "").strip()
             ),
+            "pubsub_limits_configured": _gmail_pubsub_limits() is not None,
             "accounts": [item for item in accounts if item["provider"] == "gmail"],
         },
     }
