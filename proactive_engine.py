@@ -1853,16 +1853,26 @@ class ProactiveEngine:
         payload: Dict[str, Any],
         signature: Optional[str] = None,
         timestamp: Optional[str] = None,
+        authorization: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Verify HMAC-SHA256 signature if configured and enqueue webhook event."""
+        """Authenticate a custom webhook with HMAC-SHA256 or a Bearer key, then enqueue it."""
         routine = self.store.get_routine_by_webhook(token)
         if not routine:
             return {"status": "error", "message": "Invalid webhook token or routine disabled"}
 
         secret = routine.get("webhook_secret")
-        if secret and not signature:
-            return {"status": "error", "message": "Missing HMAC signature"}
+        bearer_value = ""
+        if authorization:
+            scheme, separator, credential = authorization.partition(" ")
+            if separator and scheme.casefold() == "bearer":
+                bearer_value = credential.strip()
+        valid_bearer = bool(
+            secret and bearer_value
+            and hmac.compare_digest(str(secret), bearer_value)
+        )
+
         if secret and signature:
+            # Preserve timestamped HMAC support for existing webhook senders.
             if not timestamp:
                 return {"status": "error", "message": "Missing webhook timestamp"}
             try:
@@ -1876,7 +1886,6 @@ class ProactiveEngine:
                     return {"status": "error", "message": "Webhook timestamp is outside the allowed window"}
             except (OSError, ValueError, OverflowError, TypeError):
                 return {"status": "error", "message": "Invalid webhook timestamp"}
-            # Verify HMAC-SHA256 standard webhook signature
             raw_body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
             to_sign = f"{timestamp}.{raw_body}"
             expected = hmac.new(
@@ -1884,6 +1893,11 @@ class ProactiveEngine:
             ).hexdigest()
             if not hmac.compare_digest(expected, signature):
                 return {"status": "error", "message": "Invalid HMAC signature"}
+        elif secret and not valid_bearer:
+            return {
+                "status": "error",
+                "message": "Missing or invalid Bearer webhook key",
+            }
 
         trigger = routine.get("trigger_definition") or {}
         if isinstance(trigger, str):
