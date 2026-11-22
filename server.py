@@ -478,8 +478,31 @@ async def get_embeddings_status(current_user: Dict[str, Any] = Depends(require_u
 
 @app.get("/threads")
 @app.get("/threads/")
-async def list_threads(current_user: Dict[str, Any] = Depends(require_user)):
+def list_threads(current_user: Dict[str, Any] = Depends(require_user)):
     return chat_store.list_threads(user_id=current_user["user_id"])
+
+
+@app.get("/threads/page")
+def list_threads_page(
+    limit: int = 30,
+    offset: int = 0,
+    current_user: Dict[str, Any] = Depends(require_user),
+):
+    """Return a bounded page of sidebar metadata without loading every thread."""
+    safe_limit = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
+    rows = chat_store.list_threads(
+        user_id=current_user["user_id"],
+        limit=safe_limit + 1,
+        offset=safe_offset,
+    )
+    has_more = len(rows) > safe_limit
+    items = rows[:safe_limit]
+    return {
+        "items": items,
+        "has_more": has_more,
+        "next_offset": safe_offset + len(items),
+    }
 
 
 class ThreadCreateRequest(BaseModel):
@@ -497,8 +520,39 @@ async def create_thread(
 
 
 @app.get("/threads/{thread_id}")
-async def get_thread(thread_id: str, current_user: Dict[str, Any] = Depends(require_user)):
-    return _get_owned_thread_or_404(thread_id, current_user)
+def get_thread(
+    thread_id: str,
+    limit: Optional[int] = None,
+    before_id: Optional[int] = None,
+    include_extras: bool = True,
+    current_user: Dict[str, Any] = Depends(require_user),
+):
+    """Load a conversation page; unbounded history remains available for API clients."""
+    safe_limit = max(1, min(int(limit), 100)) if limit is not None else None
+    thread = chat_store.get_thread(
+        thread_id,
+        user_id=current_user["user_id"],
+        limit=safe_limit,
+        before_id=before_id,
+        include_extras=include_extras,
+    )
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return thread
+
+
+@app.get("/threads/{thread_id}/updates")
+def get_thread_updates(
+    thread_id: str,
+    after_id: int = 0,
+    current_user: Dict[str, Any] = Depends(require_user),
+):
+    result = chat_store.get_thread_updates(
+        thread_id, after_id=after_id, user_id=current_user["user_id"]
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return result
 
 
 @app.put("/threads/{thread_id}")
@@ -1298,7 +1352,7 @@ async def delete_thread(thread_id: str, current_user: Dict[str, Any] = Depends(r
 
 @app.get("/settings")
 @app.get("/settings/")
-async def get_settings(current_user: Dict[str, Any] = Depends(require_user)):
+def get_settings(current_user: Dict[str, Any] = Depends(require_user)):
     return chat_store.get_settings(user_id=current_user["user_id"])
 
 
@@ -5978,7 +6032,7 @@ _HAS_USERS_CACHED: Optional[bool] = None
 
 @app.get("/auth/session")
 @app.get("/api/auth/session")
-async def get_auth_session(
+def get_auth_session(
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
 ):
     """Non-failing session check used to bootstrap the SPA login gate."""

@@ -352,7 +352,7 @@ def extract_session_token(request: Request) -> Optional[str]:
 def make_auth_dependencies(get_store: Callable[[], Any]):
     """Builds FastAPI auth dependencies referencing the active PostgreSQL chat store."""
 
-    async def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
+    def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
         token = extract_session_token(request)
         if not token:
             return None

@@ -97,7 +97,11 @@ class PostgresChatStore:
             return cursor.rowcount
 
     def list_threads(
-        self, include_empty: bool = False, user_id: Optional[str] = None
+        self,
+        include_empty: bool = False,
+        user_id: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         with self._connection() as connection:
             where_clauses: list[str] = []
@@ -115,6 +119,12 @@ class PostgresChatStore:
                     )"""
                 )
             where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+            page_sql = ""
+            if limit is not None:
+                safe_limit = max(1, min(int(limit), 101))
+                safe_offset = max(0, int(offset))
+                page_sql = " LIMIT %s OFFSET %s"
+                params.extend((safe_limit, safe_offset))
             rows = connection.execute(
                 f"""
                 SELECT t.thread_id, t.title, t.created_at, t.updated_at,
@@ -130,15 +140,23 @@ class PostgresChatStore:
                 LEFT JOIN threads parent ON parent.thread_id = t.parent_thread_id
                 {where_sql}
                 ORDER BY t.updated_at DESC, t.id DESC
+                {page_sql}
                 """,
                 params,
             ).fetchall()
         return [dict(row) for row in rows]
 
     def get_thread(
-        self, thread_id: str, user_id: Optional[str] = None
+        self,
+        thread_id: str,
+        user_id: Optional[str] = None,
+        *,
+        limit: Optional[int] = None,
+        before_id: Optional[int] = None,
+        include_extras: bool = True,
     ) -> Optional[dict[str, Any]]:
-        cache_key = f"{thread_id}:{user_id or ''}"
+        page_key = f"{limit or 'all'}:{before_id or 'latest'}:{int(include_extras)}"
+        cache_key = f"{thread_id}:{user_id or ''}:{page_key}"
         now_ts = time.time()
         if cache_key in _thread_cache:
             data, expires_at = _thread_cache[cache_key]
@@ -163,54 +181,90 @@ class PostgresChatStore:
             thread = connection.execute(query, params).fetchone()
             if thread is None:
                 return None
-            messages = connection.execute(
-                """
+            message_query = """
                 SELECT id, role, content, created_at, selected_version, failed,
                     tools_json, parts_json
-                FROM messages WHERE thread_id = %s AND is_active = 1 ORDER BY id
-                """,
-                (thread_id,),
-            ).fetchall()
-            variants = connection.execute(
+                FROM messages
+                WHERE thread_id = %s AND is_active = 1
+            """
+            message_params: list[Any] = [thread_id]
+            if before_id is not None:
+                message_query += " AND id < %s"
+                message_params.append(int(before_id))
+            message_query += " ORDER BY id DESC"
+            if limit is not None:
+                safe_limit = max(1, min(int(limit), 100))
+                message_query += " LIMIT %s"
+                message_params.append(safe_limit + 1)
+            messages = connection.execute(message_query, message_params).fetchall()
+            has_more_messages = limit is not None and len(messages) > safe_limit
+            if limit is not None:
+                messages = messages[:safe_limit]
+            messages = list(reversed(messages))
+            message_ids = [int(row["id"]) for row in messages]
+            id_slots = ", ".join(["%s"] * len(message_ids))
+
+            if message_ids:
+                variants_query = """
+                    SELECT v.user_message_id, v.assistant_message_id, v.version_index,
+                        v.user_content, v.assistant_content, v.created_at, v.failed,
+                        v.tools_json, v.parts_json,
+                        u.selected_version
+                    FROM turn_versions v
+                    JOIN messages u ON u.id = v.user_message_id
+                    WHERE u.thread_id = %s AND u.is_active = 1
                 """
-                SELECT v.user_message_id, v.assistant_message_id, v.version_index,
-                    v.user_content, v.assistant_content, v.created_at, v.failed,
-                    v.tools_json, v.parts_json,
-                    u.selected_version
-                FROM turn_versions v
-                JOIN messages u ON u.id = v.user_message_id
-                WHERE u.thread_id = %s AND u.is_active = 1
-                ORDER BY v.user_message_id, v.version_index
-                """,
-                (thread_id,),
-            ).fetchall()
-            attachment_rows = connection.execute(
+                variants_params: list[Any] = [thread_id]
+                if limit is not None:
+                    variants_query += f" AND u.id IN ({id_slots})"
+                    variants_params.extend(message_ids)
+                variants_query += " ORDER BY v.user_message_id, v.version_index"
+                variants = connection.execute(variants_query, variants_params).fetchall()
+
+                attachment_query = """
+                    SELECT attachment_id, message_id, filename, content_type, size_bytes
+                    FROM attachments
+                    WHERE thread_id = %s
                 """
-                SELECT attachment_id, message_id, filename, content_type, size_bytes
-                FROM attachments
-                WHERE thread_id = %s
-                ORDER BY created_at, attachment_id
-                """,
-                (thread_id,),
-            ).fetchall()
-            artifact_rows = connection.execute(
+                attachment_params: list[Any] = [thread_id]
+                if limit is not None:
+                    attachment_query += f" AND message_id IN ({id_slots})"
+                    attachment_params.extend(message_ids)
+                attachment_query += " ORDER BY created_at, attachment_id"
+                attachment_rows = connection.execute(attachment_query, attachment_params).fetchall()
+            else:
+                variants = []
+                attachment_rows = []
+
+            if include_extras:
+                artifact_query = """
+                    SELECT artifact_id, thread_id, turn_id, title, artifact_type, language, content, created_at
+                    FROM artifacts
+                    WHERE thread_id = %s
                 """
-                SELECT artifact_id, thread_id, turn_id, title, artifact_type, language, content, created_at
-                FROM artifacts
-                WHERE thread_id = %s
-                ORDER BY id ASC
-                """,
-                (thread_id,),
-            ).fetchall()
-            canvas_rows = connection.execute(
-                """
-                SELECT canvas_id, thread_id, title, spec_json, created_at
-                FROM canvases
-                WHERE thread_id = %s
-                ORDER BY id ASC
-                """,
-                (thread_id,),
-            ).fetchall()
+                artifact_params: list[Any] = [thread_id]
+                selected_user_ids = [int(row["id"]) for row in messages if row["role"] == "user"]
+                if limit is not None:
+                    if selected_user_ids:
+                        artifact_slots = ", ".join(["%s"] * len(selected_user_ids))
+                        artifact_query += f" AND turn_id IN ({artifact_slots})"
+                        artifact_params.extend(selected_user_ids)
+                    else:
+                        artifact_query += " AND 1 = 0"
+                artifact_query += " ORDER BY id ASC"
+                artifact_rows = connection.execute(artifact_query, artifact_params).fetchall()
+                canvas_rows = connection.execute(
+                    """
+                    SELECT canvas_id, thread_id, title, spec_json, created_at
+                    FROM canvases
+                    WHERE thread_id = %s
+                    ORDER BY id ASC
+                    """,
+                    (thread_id,),
+                ).fetchall()
+            else:
+                artifact_rows = []
+                canvas_rows = []
 
             attachments_by_message: dict[int, list[dict[str, Any]]] = {}
             for attachment in attachment_rows:
@@ -398,9 +452,76 @@ class PostgresChatStore:
             "messages": loaded_messages,
             "canvases": thread_canvases,
             "artifacts": thread_artifacts,
+            "has_more_messages": bool(has_more_messages),
         }
         _thread_cache[cache_key] = (result, time.time() + THREAD_CACHE_TTL)
         return copy.deepcopy(result)
+
+    def get_thread_updates(
+        self, thread_id: str, after_id: int, user_id: Optional[str] = None
+    ) -> Optional[dict[str, Any]]:
+        """Return only newly created active messages for lightweight cross-tab sync."""
+        with self._connection() as connection:
+            owner_query = "SELECT 1 FROM threads WHERE thread_id = %s"
+            owner_params: list[Any] = [thread_id]
+            if user_id is not None:
+                owner_query += " AND user_id = %s"
+                owner_params.append(user_id)
+            if connection.execute(owner_query, owner_params).fetchone() is None:
+                return None
+
+            rows = connection.execute(
+                """
+                SELECT id, role, content, created_at, selected_version, failed,
+                    tools_json, parts_json
+                FROM messages
+                WHERE thread_id = %s AND is_active = 1 AND id > %s
+                ORDER BY id ASC
+                LIMIT 101
+                """,
+                (thread_id, max(0, int(after_id))),
+            ).fetchall()
+            has_more = len(rows) > 100
+            rows = rows[:100]
+            message_ids = [int(row["id"]) for row in rows]
+            attachments_by_message: dict[int, list[dict[str, Any]]] = {}
+            if message_ids:
+                slots = ", ".join(["%s"] * len(message_ids))
+                attachments = connection.execute(
+                    f"""
+                    SELECT attachment_id, message_id, filename, content_type, size_bytes
+                    FROM attachments
+                    WHERE thread_id = %s AND message_id IN ({slots})
+                    ORDER BY created_at, attachment_id
+                    """,
+                    [thread_id, *message_ids],
+                ).fetchall()
+                for attachment in attachments:
+                    attachments_by_message.setdefault(attachment["message_id"], []).append(
+                        {
+                            "attachment_id": attachment["attachment_id"],
+                            "filename": attachment["filename"],
+                            "content_type": attachment["content_type"],
+                            "size_bytes": attachment["size_bytes"],
+                        }
+                    )
+
+        messages = []
+        for row in rows:
+            item = dict(row)
+            raw_tools = item.pop("tools_json", None)
+            raw_parts = item.pop("parts_json", None)
+            try:
+                item["tools"] = json.loads(raw_tools) if raw_tools else []
+            except Exception:
+                item["tools"] = []
+            try:
+                item["parts"] = json.loads(raw_parts) if raw_parts else []
+            except Exception:
+                item["parts"] = []
+            item["attachments"] = attachments_by_message.get(row["id"], [])
+            messages.append(item)
+        return {"messages": messages, "has_more": has_more}
 
     def thread_exists(
         self, thread_id: str, user_id: Optional[str] = None
