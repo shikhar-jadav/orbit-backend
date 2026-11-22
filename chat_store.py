@@ -1880,6 +1880,41 @@ class PostgresChatStore:
             for row in rows
         ]
 
+    def get_session_token_hash(self, user_id: str, session_id: str) -> Optional[str]:
+        """Return the hashed token for one session owned by this user."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT token_hash FROM user_sessions
+                WHERE user_id = %s AND session_id = %s
+                """,
+                (user_id, session_id),
+            ).fetchone()
+        return row["token_hash"] if row else None
+
+    def list_unrevoked_session_token_hashes(
+        self, user_id: str, except_session_id: Optional[str] = None
+    ) -> list[str]:
+        """Return token hashes for sessions this user-revocation operation will revoke."""
+        with self._connection() as connection:
+            if except_session_id:
+                rows = connection.execute(
+                    """
+                    SELECT token_hash FROM user_sessions
+                    WHERE user_id = %s AND revoked = 0 AND session_id != %s
+                    """,
+                    (user_id, except_session_id),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT token_hash FROM user_sessions
+                    WHERE user_id = %s AND revoked = 0
+                    """,
+                    (user_id,),
+                ).fetchall()
+        return [row["token_hash"] for row in rows if row["token_hash"]]
+
     def revoke_session(self, user_id: str, session_id: str) -> bool:
         with self._connection() as connection:
             cursor = connection.execute(
