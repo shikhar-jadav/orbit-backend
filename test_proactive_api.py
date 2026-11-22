@@ -327,7 +327,26 @@ def test_event_routine_setup_and_webhook_signature(test_client, auth_headers):
         },
     )
     assert unsigned.status_code == 400
-    assert unsigned.json()["detail"] == "Missing HMAC signature"
+    assert unsigned.json()["detail"] == "Missing or invalid Bearer webhook key"
+
+    bearer = test_client.post(
+        data["webhook_url"],
+        json={
+            "event_type": "issues.opened",
+            "provider_event_id": "issue-bearer-1",
+            "labels": ["bug"],
+        },
+        headers={"Authorization": f"Bearer {data['webhook_secret']}"},
+    )
+    assert bearer.status_code == 200
+    assert bearer.json()["status"] == "accepted"
+
+    invalid_bearer = test_client.post(
+        data["webhook_url"],
+        json={"event_type": "issues.opened", "provider_event_id": "issue-bearer-2"},
+        headers={"Authorization": "Bearer incorrect-key"},
+    )
+    assert invalid_bearer.status_code == 400
 
     import hashlib
     import hmac
