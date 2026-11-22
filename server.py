@@ -2973,6 +2973,8 @@ async def list_routine_runs_endpoint(
     limit: int = 20,
     current_user: Dict[str, Any] = Depends(require_user),
 ):
+    # Keep the history response bounded even when callers supply an arbitrary limit.
+    limit = max(1, min(limit, 50))
     routine = proactive_store.get_routine(routine_id)
     if not routine:
         raise HTTPException(status_code=404, detail="Routine not found.")
