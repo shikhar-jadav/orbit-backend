@@ -322,27 +322,32 @@ class PostgresChatStore:
                     "spec": spec,
                     "created_at": row["created_at"],
                 })
-            workspace_dir = Path("data/workspaces") / thread_id
+            # Workspace scans are only needed to reconstruct legacy tool events.
+            # The fast history API sets include_extras=False, so do not touch the
+            # filesystem on the chat's critical loading path.
             workspace_files: dict[str, Path] = {}
-            if workspace_dir.is_dir():
-                workspace_files = {
-                    entry.name.casefold(): entry
-                    for entry in workspace_dir.iterdir()
-                    if entry.is_file() and entry.name != "__pycache__"
-                }
-            workspace_file_pattern = (
-                re.compile(
-                    r"\b(?:"
-                    + "|".join(
-                        re.escape(name)
-                        for name in sorted(workspace_files, key=len, reverse=True)
+            workspace_file_pattern = None
+            if include_extras:
+                workspace_dir = Path("data/workspaces") / thread_id
+                if workspace_dir.is_dir():
+                    workspace_files = {
+                        entry.name.casefold(): entry
+                        for entry in workspace_dir.iterdir()
+                        if entry.is_file() and entry.name != "__pycache__"
+                    }
+                workspace_file_pattern = (
+                    re.compile(
+                        r"\b(?:"
+                        + "|".join(
+                            re.escape(name)
+                            for name in sorted(workspace_files, key=len, reverse=True)
+                        )
+                        + r")\b",
+                        re.IGNORECASE,
                     )
-                    + r")\b",
-                    re.IGNORECASE,
+                    if workspace_files
+                    else None
                 )
-                if workspace_files
-                else None
-            )
             loaded_messages = []
             messages_to_backfill: list[tuple[str, str, int]] = []
             latest_user_id: Optional[int] = None
@@ -374,7 +379,7 @@ class PostgresChatStore:
                     latest_user_id = None
 
                     # Smart fallback for historical assistant messages created before persistence
-                    if not message["tools"] and not message["parts"]:
+                    if include_extras and not message["tools"] and not message["parts"]:
                         synthesized_tools: list[dict[str, Any]] = []
                         # 1. Check workspace files mentioned in content
                         if workspace_file_pattern:
