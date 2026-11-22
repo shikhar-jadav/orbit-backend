@@ -37,6 +37,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSO
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
 import yaml
 from langchain_core.documents import Document
@@ -3812,7 +3813,7 @@ async def stream_notifications_endpoint(
     request: Request,
     token: Optional[str] = None,
 ):
-    user = await get_current_user_optional(request)
+    user = await run_in_threadpool(get_current_user_optional, request)
     if not user and token:
         try:
             payload = auth.verify_token(token)
