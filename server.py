@@ -3278,6 +3278,7 @@ async def event_integration_status_endpoint(
         base_url = ""
     accounts = provider_integration_store.public_accounts(current_user["user_id"])
     return {
+        "public_url": base_url or None,
         "public_url_configured": bool(base_url),
         "webhook_payload_limit_configured": _provider_webhook_max_bytes() is not None,
         "token_storage_configured": provider_integration_store.token_storage_configured,
@@ -3307,6 +3308,7 @@ async def event_integration_status_endpoint(
 @app.post("/api/integrations/{provider}/oauth/start")
 async def start_event_integration_oauth_endpoint(
     provider: str,
+    request: Request,
     current_user: Dict[str, Any] = Depends(require_user),
 ):
     config = _event_oauth_config(provider)
@@ -3369,19 +3371,39 @@ async def start_event_integration_oauth_endpoint(
     for key in list(PENDING_EVENT_OAUTH_STATES):
         if now - PENDING_EVENT_OAUTH_STATES[key].get("created_at", 0) > 900:
             PENDING_EVENT_OAUTH_STATES.pop(key, None)
+    origin_header = request.headers.get("origin", "").strip()
+    parsed_origin = urllib.parse.urlsplit(origin_header)
+    frontend_origin = None
+    if (
+        parsed_origin.scheme in {"https", "http"}
+        and parsed_origin.hostname
+        and parsed_origin.username is None
+        and parsed_origin.password is None
+        and parsed_origin.path in {"", "/"}
+        and not parsed_origin.query
+        and not parsed_origin.fragment
+    ):
+        frontend_origin = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
+
     PENDING_EVENT_OAUTH_STATES[state] = {
         "provider": provider,
         "user_id": current_user["user_id"],
         "redirect_uri": redirect_uri,
+        "frontend_origin": frontend_origin,
         "created_at": now,
     }
     return {"auth_url": auth_url, "provider": provider}
 
 
-def _event_oauth_result_html(provider: str, error: Optional[str] = None) -> HTMLResponse:
+def _event_oauth_result_html(
+    provider: str,
+    error: Optional[str] = None,
+    target_origin: Optional[str] = None,
+) -> HTMLResponse:
     message = error or f"{provider.title()} is connected. You can close this window."
     safe_message = json.dumps(message).replace("</", "<\\/")
     safe_provider = json.dumps(provider)
+    safe_target_origin = json.dumps(target_origin or "*")
     event_type = "orbit_integration_error" if error else "orbit_integration_connected"
     return HTMLResponse(
         content=f"""<!doctype html>
@@ -3389,7 +3411,10 @@ def _event_oauth_result_html(provider: str, error: Optional[str] = None) -> HTML
 <body><p>{html.escape(message)}</p>
 <script>
   if (window.opener) {{
-    window.opener.postMessage({{type:{json.dumps(event_type)}, provider:{safe_provider}, message:{safe_message}}}, window.location.origin);
+    window.opener.postMessage(
+      {{type:{json.dumps(event_type)}, provider:{safe_provider}, message:{safe_message}}},
+      {safe_target_origin}
+    );
   }}
   setTimeout(() => window.close(), 1200);
 </script></body></html>"""
@@ -3403,13 +3428,22 @@ async def event_integration_oauth_callback_endpoint(
     state: Optional[str] = None,
     error: Optional[str] = None,
 ):
+    session = PENDING_EVENT_OAUTH_STATES.pop(state, None) if state else None
+    target_origin = session.get("frontend_origin") if session else None
     if error or not state or not code:
-        return _event_oauth_result_html(provider, error or "Authorization was not completed.")
-    session = PENDING_EVENT_OAUTH_STATES.pop(state, None)
+        return _event_oauth_result_html(
+            provider,
+            error or "Authorization was not completed.",
+            target_origin,
+        )
     if not session or session.get("provider") != provider:
-        return _event_oauth_result_html(provider, "The connection expired. Please try again.")
+        return _event_oauth_result_html(
+            provider, "The connection expired. Please try again.", target_origin
+        )
     if time.time() - session.get("created_at", 0) > 900:
-        return _event_oauth_result_html(provider, "The connection expired. Please try again.")
+        return _event_oauth_result_html(
+            provider, "The connection expired. Please try again.", target_origin
+        )
 
     config = _event_oauth_config(provider)
     try:
@@ -3516,9 +3550,13 @@ async def event_integration_oauth_callback_endpoint(
             scopes=scopes,
             metadata=metadata,
         )
-        return _event_oauth_result_html(provider)
+        return _event_oauth_result_html(provider, target_origin=target_origin)
     except Exception as exc:
-        return _event_oauth_result_html(provider, f"Could not connect {provider.title()}: {exc}")
+        return _event_oauth_result_html(
+            provider,
+            f"Could not connect {provider.title()}: {exc}",
+            target_origin,
+        )
 
 
 @app.delete("/api/integrations/{provider}")
