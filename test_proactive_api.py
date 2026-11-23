@@ -160,6 +160,40 @@ def test_routines_api_crud(test_client, auth_headers):
     )
     assert "historical Orbit autonomous routine execution" in continued_history[1]["content"]
 
+    # Reopening the same run must reuse the existing routine thread without
+    # importing the same execution transcript a second time.
+    res_continue_again = test_client.post(
+        f"/api/routines/{routine_id}/runs/{run_id}/continue",
+        headers=headers,
+    )
+    assert res_continue_again.status_code == 200
+    assert res_continue_again.json()["thread"]["thread_id"] == continued_thread["thread_id"]
+    assert len(
+        server.chat_store.get_thread(
+            continued_thread["thread_id"],
+            user_id=user_id,
+            include_extras=False,
+        )["messages"]
+    ) == 2
+
+    # A later run from this routine is imported into the same routine chat.
+    res_run_again = test_client.post(f"/api/routines/{routine_id}/run", headers=headers)
+    assert res_run_again.status_code == 200
+    next_runs = test_client.get(f"/api/routines/{routine_id}/runs", headers=headers).json()["runs"]
+    next_run_id = next(item["id"] for item in next_runs if item["id"] != run_id)
+    res_continue_next = test_client.post(
+        f"/api/routines/{routine_id}/runs/{next_run_id}/continue",
+        headers=headers,
+    )
+    assert res_continue_next.status_code == 200
+    assert res_continue_next.json()["thread"]["thread_id"] == continued_thread["thread_id"]
+    persisted_thread = server.chat_store.get_thread(
+        continued_thread["thread_id"],
+        user_id=user_id,
+        include_extras=False,
+    )
+    assert len(persisted_thread["messages"]) == 4
+
     # 6. Notifications API
     res_notifs = test_client.get("/api/notifications", headers=headers)
     assert res_notifs.status_code == 200
