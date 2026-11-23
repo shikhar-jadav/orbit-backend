@@ -33,3 +33,6 @@ data/workspaces/*
 htmlcov/
 *.log
 .DS_Store
+
+gmail-mcp/
+
