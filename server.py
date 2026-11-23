@@ -331,6 +331,7 @@ def _initialize_application_state() -> None:
             database,
             encryption_key=os.getenv("INTEGRATION_TOKEN_ENCRYPTION_KEY"),
         )
+        gmail_mcp_server.configure_provider_integration_store(provider_integration_store)
         proactive_engine = ProactiveEngine(
             store=proactive_store,
             agent=agent,
