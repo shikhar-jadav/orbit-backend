@@ -9,6 +9,8 @@ import ipaddress
 import json
 import os
 import re
+import time
+from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -16,6 +18,73 @@ import httpx
 
 MCP_PROTOCOL_VERSION = "2025-03-26"
 MCP_PROTOCOL_FALLBACK = "2024-11-05"
+
+# Keep outbound HTTP connections alive between tool invocations. MCP tool calls
+# often target the same server repeatedly; a fresh client per call discards the
+# TCP/TLS connection pool every time.
+_SHARED_MCP_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+_SHARED_MCP_HTTP_CLIENT_LOCK = Lock()
+_MCP_SESSION_CACHE: Dict[str, Tuple[str, float]] = {}
+_MCP_SESSION_CACHE_TTL_SECONDS = 180.0
+
+
+def _get_shared_mcp_http_client() -> httpx.AsyncClient:
+    global _SHARED_MCP_HTTP_CLIENT
+    with _SHARED_MCP_HTTP_CLIENT_LOCK:
+        if _SHARED_MCP_HTTP_CLIENT is None or _SHARED_MCP_HTTP_CLIENT.is_closed:
+            _SHARED_MCP_HTTP_CLIENT = httpx.AsyncClient(
+                timeout=25.0,
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=40,
+                    max_keepalive_connections=20,
+                    keepalive_expiry=30.0,
+                ),
+            )
+        return _SHARED_MCP_HTTP_CLIENT
+
+
+async def close_shared_mcp_http_client() -> None:
+    """Close the shared MCP connection pool during application shutdown."""
+    global _SHARED_MCP_HTTP_CLIENT
+    with _SHARED_MCP_HTTP_CLIENT_LOCK:
+        client = _SHARED_MCP_HTTP_CLIENT
+        _SHARED_MCP_HTTP_CLIENT = None
+        _MCP_SESSION_CACHE.clear()
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
+def _mcp_session_cache_key(url: str, headers: Dict[str, str]) -> str:
+    # Hash all headers, including Authorization, so credentials never appear in
+    # cache keys, diagnostic output, or logs. Different users/tokens never share a session.
+    header_fingerprint = json.dumps(
+        sorted((str(key).lower(), str(value)) for key, value in headers.items()),
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(header_fingerprint.encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{url}|{digest}".encode("utf-8")).hexdigest()
+
+
+def _get_cached_mcp_session(cache_key: str) -> Optional[str]:
+    cached = _MCP_SESSION_CACHE.get(cache_key)
+    if not cached:
+        return None
+    session_id, expires_at = cached
+    if time.monotonic() >= expires_at:
+        _MCP_SESSION_CACHE.pop(cache_key, None)
+        return None
+    return session_id
+
+
+def _cache_mcp_session(cache_key: str, session_id: Optional[str]) -> None:
+    if session_id:
+        _MCP_SESSION_CACHE[cache_key] = (
+            str(session_id),
+            time.monotonic() + _MCP_SESSION_CACHE_TTL_SECONDS,
+        )
+
+
 READ_ONLY_TOOL_PREFIXES = (
     "get_",
     "list_",
@@ -492,9 +561,13 @@ async def _post_mcp_jsonrpc(
     body: Dict[str, Any],
     *,
     rpc_id: Optional[Any] = None,
+    timeout: Optional[float] = None,
 ) -> Tuple[int, str, httpx.Headers, Optional[Dict[str, Any]]]:
     """POST JSON-RPC via Streamable HTTP without hanging on open text/event-stream responses."""
-    async with client.stream("POST", mcp_url, headers=headers, json=body) as resp:
+    request_options = {"timeout": timeout} if timeout is not None else {}
+    async with client.stream(
+        "POST", mcp_url, headers=headers, json=body, **request_options
+    ) as resp:
         status = resp.status_code
         reason = resp.reason_phrase or f"HTTP {status}"
         ctype = (resp.headers.get("content-type") or "").lower()
@@ -989,57 +1062,102 @@ async def call_mcp_tool(
     custom_headers: Optional[Dict[str, str]] = None,
     timeout: float = 25.0,
 ) -> str:
-    """Invoke a remote MCP tool via Streamable HTTP JSON-RPC (with HTTP+SSE fallback)."""
+    """Invoke a remote MCP tool, reusing pooled HTTP connections and valid MCP sessions."""
     url = validate_mcp_url(mcp_url)
     headers = _base_mcp_headers(custom_headers)
+    client = _get_shared_mcp_http_client()
+    cache_key = _mcp_session_cache_key(url, headers)
+    tool_payload = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
 
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        status, reason, _, init_payload, session_id = await _init_streamable_session(
-            client, url, headers
+    # A server-provided MCP session lets us skip initialize + initialized
+    # notification on subsequent calls. Session keys include a one-way hash of
+    # all headers, so credentials from separate users are isolated.
+    session_id = _get_cached_mcp_session(cache_key)
+    if session_id:
+        session_headers = {**headers, "Mcp-Session-Id": session_id}
+        c_status, c_reason, _, call_payload = await _post_mcp_jsonrpc(
+            client, url, session_headers, tool_payload, rpc_id=3, timeout=timeout
         )
+        if c_status not in (404, 405, 410):
+            if c_status >= 400:
+                raise RuntimeError(f"MCP tool call failed with HTTP {c_status} ({c_reason})")
+            return _format_mcp_call_payload(call_payload)
 
-        if status == 405:
-            _, sse_res, sse_err = await _legacy_sse_exchange(
-                client,
-                url,
-                headers,
-                [(3, "tools/call", {"name": tool_name, "arguments": arguments})],
-            )
-            if sse_err:
-                return f"MCP tool error: {sse_err}"
-            return _format_mcp_call_payload(sse_res.get(3))
-
-        if status >= 400:
-            raise RuntimeError(f"MCP initialize failed with HTTP {status} ({reason})")
-        init_err = _extract_rpc_error(init_payload)
-        if init_err:
-            raise RuntimeError(f"MCP initialize error: {init_err}")
-
-        rpc_headers = dict(headers)
-        if session_id:
-            rpc_headers["Mcp-Session-Id"] = session_id
-
+        # Do not replay a tool call automatically after an expired session: the
+        # remote server may have performed the action before returning an error.
+        # Re-establish the session for the next tool call and report the current
+        # call as not completed, avoiding accidental duplicate writes/sends.
+        _MCP_SESSION_CACHE.pop(cache_key, None)
         try:
-            await client.post(
-                url,
-                headers=rpc_headers,
-                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            status, reason, _, init_payload, replacement_session_id = await _init_streamable_session(
+                client, url, headers
             )
+            if status == 200 and not _extract_rpc_error(init_payload):
+                if replacement_session_id:
+                    _cache_mcp_session(cache_key, replacement_session_id)
+                    rpc_headers = {**headers, "Mcp-Session-Id": replacement_session_id}
+                else:
+                    rpc_headers = dict(headers)
+                if init_payload and isinstance(init_payload.get("result"), dict):
+                    try:
+                        await client.post(
+                            url,
+                            headers=rpc_headers,
+                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                            timeout=timeout,
+                        )
+                    except Exception:
+                        pass
         except Exception:
             pass
+        raise RuntimeError(
+            "MCP session expired. Orbit reconnected the service, but did not repeat this tool action. Please retry it."
+        )
 
-        c_status, c_reason, _, call_payload = await _post_mcp_jsonrpc(
+    status, reason, _, init_payload, session_id = await _init_streamable_session(
+        client, url, headers
+    )
+
+    if status == 405:
+        _, sse_res, sse_err = await _legacy_sse_exchange(
             client,
             url,
-            rpc_headers,
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {"name": tool_name, "arguments": arguments},
-            },
-            rpc_id=3,
+            headers,
+            [(3, "tools/call", {"name": tool_name, "arguments": arguments})],
         )
-        if c_status >= 400:
-            raise RuntimeError(f"MCP tool call failed with HTTP {c_status} ({c_reason})")
-        return _format_mcp_call_payload(call_payload)
+        if sse_err:
+            return f"MCP tool error: {sse_err}"
+        return _format_mcp_call_payload(sse_res.get(3))
+
+    if status >= 400:
+        raise RuntimeError(f"MCP initialize failed with HTTP {status} ({reason})")
+    init_err = _extract_rpc_error(init_payload)
+    if init_err:
+        raise RuntimeError(f"MCP initialize error: {init_err}")
+
+    rpc_headers = dict(headers)
+    if session_id:
+        rpc_headers["Mcp-Session-Id"] = session_id
+        _cache_mcp_session(cache_key, session_id)
+
+    try:
+        await client.post(
+            url,
+            headers=rpc_headers,
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            timeout=timeout,
+        )
+    except Exception:
+        pass
+
+    c_status, c_reason, _, call_payload = await _post_mcp_jsonrpc(
+        client, url, rpc_headers, tool_payload, rpc_id=3, timeout=timeout
+    )
+    if c_status >= 400:
+        raise RuntimeError(f"MCP tool call failed with HTTP {c_status} ({c_reason})")
+    return _format_mcp_call_payload(call_payload)

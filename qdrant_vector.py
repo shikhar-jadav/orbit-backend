@@ -92,6 +92,11 @@ class QdrantVectorStore:
     def is_ready(self) -> bool:
         return self._is_ready and self.client is not None
 
+    @property
+    def supports_semantic_search(self) -> bool:
+        """Whether this process can embed queries as well as reach Qdrant."""
+        return self.is_ready and _FASTEMBED_AVAILABLE
+
     def _get_embedder(self):
         """Lazy-initialize singleton FastEmbed model."""
         if QdrantVectorStore._embedder is None and _FASTEMBED_AVAILABLE:
@@ -168,7 +173,7 @@ class QdrantVectorStore:
         """
         Embed and upsert a memory record into Qdrant Cloud.
         """
-        if not self.is_ready or not text.strip():
+        if not self.supports_semantic_search or not text.strip():
             return False
 
         try:
@@ -221,7 +226,7 @@ class QdrantVectorStore:
         """
         Perform vector cosine similarity search in Qdrant Cloud with metadata filtering.
         """
-        if not self.is_ready or not query.strip():
+        if not self.supports_semantic_search or not query.strip():
             return []
 
         try:
