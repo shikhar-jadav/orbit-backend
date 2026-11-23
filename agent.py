@@ -399,7 +399,9 @@ async def _execute_mcp_tool_with_auto_refresh(
     ):
         try:
             from gmail_mcp_server import execute_gmail_tool, resolve_user_gmail_token
-            access_token, _, _ = await resolve_user_gmail_token(None, x_user_id=target_user_id)
+            access_token, _, _ = await resolve_user_gmail_token(
+                None, x_user_id=target_user_id, allow_internal_user_id=True
+            )
             if not access_token:
                 # Fallback to Authorization header if present
                 for k, v in custom_headers.items():
