@@ -684,6 +684,21 @@ class ProactiveStore:
                         pass
             return res
 
+    def set_routine_chat_thread(
+        self, routine_id: str, user_id: str, thread_id: str
+    ) -> Optional[str]:
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """
+                UPDATE proactive_routines
+                SET chat_thread_id = %s, updated_at = %s
+                WHERE id = %s AND user_id = %s
+                RETURNING chat_thread_id
+                """,
+                (thread_id, utc_now_iso(), routine_id, user_id),
+            ).fetchone()
+        return str(row["chat_thread_id"]) if row else None
+
     def get_routine_by_webhook(self, token: str) -> Optional[Dict[str, Any]]:
         with self._connection() as conn:
             row = conn.execute(
@@ -1181,6 +1196,21 @@ class ProactiveStore:
                 (run_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def set_run_chat_thread(
+        self, run_id: str, routine_id: str, thread_id: str
+    ) -> Optional[str]:
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """
+                UPDATE proactive_runs
+                SET chat_thread_id = %s
+                WHERE id = %s AND routine_id = %s
+                RETURNING chat_thread_id
+                """,
+                (thread_id, run_id, routine_id),
+            ).fetchone()
+        return str(row["chat_thread_id"]) if row else None
 
     def update_run_status(
         self,
