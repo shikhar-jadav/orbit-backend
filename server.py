@@ -1288,6 +1288,33 @@ def agent_history_from_messages(
     return history
 
 
+def deduplicate_message_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Remove duplicate pre-tool commentary when a post-tool turn repeats
+    or supersedes preliminary text, preventing doubled assistant bubbles.
+    """
+    if not parts or len(parts) <= 1:
+        return parts
+
+    clean_parts: list[dict[str, Any]] = []
+    for i, part in enumerate(parts):
+        if part.get("type") == "text":
+            txt = (part.get("text") or "").strip()
+            if not txt:
+                continue
+            is_subsumed = False
+            for j in range(i + 1, len(parts)):
+                if parts[j].get("type") == "text":
+                    next_txt = (parts[j].get("text") or "").strip()
+                    if next_txt and (next_txt == txt or next_txt.startswith(txt)):
+                        is_subsumed = True
+                        break
+            if is_subsumed:
+                continue
+        clean_parts.append(part)
+    return clean_parts
+
+
 def attachment_message_for_request(
     messages: list[dict[str, Any]], prompt: str
 ) -> tuple[int, dict[str, Any]] | None:
@@ -5294,7 +5321,10 @@ async def agui_endpoint(
                         except Exception:
                             pass
                 elif event_type == "done":
+                    collected_parts = deduplicate_message_parts(collected_parts)
                     assistant_content = str(data.get("content", ""))
+                    collected_parts = deduplicate_message_parts(collected_parts)
+                    collected_parts = deduplicate_message_parts(collected_parts)
                     assistant_message_record = chat_store.add_message(
                         thread_id,
                         "assistant",
@@ -6338,6 +6368,7 @@ async def regenerate_chat_endpoint(
                             pass
 
                 if event.get("type") == "done":
+                    collected_parts = deduplicate_message_parts(collected_parts)
                     content = str(event.get("data", {}).get("content", ""))
                     chat_store.complete_turn_version(
                         request.thread_id,

@@ -78,6 +78,12 @@ For multi-step tasks, plan the required operations, execute them in the appropri
 
 Do not narrate every internal tool call. Communicate meaningful progress when a task is substantial, and summarize the actual results after the necessary operations are complete.
 
+## Tool Call Discipline & Avoiding Premature Responses
+- When invoking a tool, do NOT produce the final answer, premature completion statement, or duplicate explanations in the same turn before the tool runs.
+- Do NOT say "I have set up X" or "I have checked your emails and found Y" before the tool has actually executed and returned its verified output.
+- Keep pre-tool output empty or at most a single brief status phrase (e.g. "Checking your mailbox...").
+- Deliver the full final answer ONCE, after receiving and verifying the tool execution results. Never repeat the same explanation before and after the tool card.
+
 # 4. Workspace and Files
 Use the single `workspace_files` tool for ALL workspace file operations.
 
@@ -121,6 +127,12 @@ Use ONLY the single unified tool `manage_routine` for ALL proactive automations,
 - Pausing and resuming routines (`action="pause"`, `action="resume"`).
 - Deleting routines or event triggers (`action="delete"`).
 - Testing routines (`action="test"`).
+
+## Reading and Searching Emails vs Background Routines
+- When a user asks in chat to check, read, list, find, or search emails (e.g. "what was the last mail I received", "who emailed me today", "search my inbox for X", "check my unread emails"):
+  ALWAYS use the Gmail connector tools (`list_messages`, `read_email`, `search_messages`).
+  NEVER call `manage_routine` for a user query asking about current, existing, or past emails!
+- ONLY call `manage_routine` when the user explicitly requests background automation, future event monitoring, or recurring schedules (e.g. "Whenever a new email arrives from boss, alert me", "Summarize incoming emails in the background").
 
 ## Event Triggers (GitHub, Slack, Gmail, Webhooks)
 When a user asks in chat to automate actions based on events (e.g. "whenever a new issue comes summarize it and tell me", "notify me when a PR is opened", "when a new email arrives from X summarize it", "set up a webhook for alerts"):
@@ -378,6 +390,31 @@ async def _execute_mcp_tool_with_auto_refresh(
     chat_store: Optional[Any] = None,
 ) -> str:
     """Execute an MCP tool with automatic 401 token refresh for OAuth connectors."""
+    # 0. Co-hosted Gmail MCP: Execute directly in-process with automatic token resolution & refresh
+    if (
+        conn.get("is_cohosted")
+        or conn.get("id") == "marketplace_gmail_mcp"
+        or conn.get("mcp_url") == "in-process://gmail"
+        or "gmail" in conn.get("name", "").lower()
+    ):
+        try:
+            from gmail_mcp_server import execute_gmail_tool, resolve_user_gmail_token
+            access_token, _, _ = await resolve_user_gmail_token(None, x_user_id=target_user_id)
+            if not access_token:
+                # Fallback to Authorization header if present
+                for k, v in custom_headers.items():
+                    if k.lower() == "authorization" and v.lower().startswith("bearer "):
+                        access_token = v[7:].strip()
+                        break
+            if not access_token:
+                return (
+                    "Error: Gmail account is not connected. "
+                    "Please connect your Google account in Settings > Integrations before accessing Gmail."
+                )
+            return await execute_gmail_tool(raw_mcp_name, tool_args if isinstance(tool_args, dict) else {}, access_token=access_token)
+        except Exception as ge:
+            return f"Error executing Gmail tool '{raw_mcp_name}': {ge}"
+
     import mcp_client
     try:
         return await mcp_client.call_mcp_tool(
@@ -899,44 +936,20 @@ class ReActAgent:
                         if mp_c.get("id") == "gmail-mcp":
                             if any(c.get("name", "").lower() == "gmail" or "gmail" in c.get("mcp_url", "").lower() for c in connectors):
                                 continue
-                            cfg = mp_c.get("config") or {}
-                            mcp_url = cfg.get("mcp_url") or os.getenv("GMAIL_MCP_SERVICE_URL") or "http://127.0.0.1:8000/api/mcp/gmail"
-                            svc_secret = cfg.get("service_secret") or os.getenv("ORBIT_SERVICE_SECRET")
-                            gmail_headers = []
-                            if svc_secret:
-                                gmail_headers.append({"key": "X-Orbit-Secret", "value": svc_secret})
-                            gmail_headers.append({"key": "X-User-Id", "value": target_user_id})
-
                             try:
-                                from proactive_integrations import ProviderIntegrationStore
-                                pis = ProviderIntegrationStore()
-                                user_account = pis.get_account(target_user_id, "gmail")
-                                if user_account and user_account.get("access_token"):
-                                    gmail_headers.append({"key": "Authorization", "value": f"Bearer {user_account['access_token']}"})
-                                    if user_account.get("refresh_token"):
-                                        gmail_headers.append({"key": "X-Refresh-Token", "value": user_account["refresh_token"]})
-                                    if user_account.get("scopes"):
-                                        gmail_headers.append({"key": "X-Authorized-Scopes", "value": ",".join(user_account["scopes"])})
-                            except Exception:
-                                pass
-
-                            try:
-                                discovered_tools = await mcp_client.connect_and_list_mcp_tools(
-                                    mcp_url,
-                                    custom_headers={h["key"]: h["value"] for h in gmail_headers},
-                                    timeout=3.5,
-                                )
+                                from gmail_mcp_server import GMAIL_MCP_TOOLS
                                 connectors.append({
                                     "id": "marketplace_gmail_mcp",
                                     "name": "Gmail",
-                                    "mcp_url": mcp_url,
+                                    "mcp_url": "in-process://gmail",
                                     "is_connected": True,
-                                    "headers": gmail_headers,
-                                    "tools": discovered_tools,
+                                    "is_cohosted": True,
+                                    "headers": [],
+                                    "tools": GMAIL_MCP_TOOLS,
                                     "tool_permissions": {},
                                 })
-                            except Exception:
-                                pass
+                            except Exception as g_err:
+                                print(f"[agent] Failed to load co-hosted Gmail MCP tools: {g_err}")
                 except Exception:
                     pass
 
@@ -950,7 +963,7 @@ class ReActAgent:
                         raw_name = str(tool_def.get("name", "")).strip()
                         if not raw_name:
                             continue
-                        is_read_only = bool(tool_def.get("readOnlyHint"))
+                        is_read_only = bool(tool_def.get("readOnlyHint") or tool_def.get("read_only"))
                         perm = (
                             perms.get(raw_name)
                             or perms.get(raw_name.lower())
@@ -1001,10 +1014,15 @@ class ReActAgent:
                         }
                         all_catalog_tools[bound_name] = tool_entry
 
-                # Keep MCP tools out of the system prompt and initial tool bindings whenever
-                # `search_available_tools` is present; external MCP tools are loaded only via search.
+                # Keep external dynamic MCP tools behind search_available_tools,
+                # but ALWAYS include co-hosted or core connectors (e.g. Gmail) immediately.
                 if "search_available_tools" not in self.tools_by_name:
                     active_mcp_tools = dict(all_catalog_tools)
+                else:
+                    for b_name, t_entry in all_catalog_tools.items():
+                        c_info = t_entry.get("conn") or {}
+                        if c_info.get("is_cohosted") or c_info.get("id") == "marketplace_gmail_mcp" or "gmail" in c_info.get("name", "").lower():
+                            active_mcp_tools[b_name] = t_entry
 
                 for bound_name, t_entry in active_mcp_tools.items():
                     mcp_tool_defs.append(t_entry["def"])

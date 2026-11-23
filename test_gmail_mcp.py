@@ -68,3 +68,50 @@ def test_gmail_mcp_tools_call_unauthenticated():
     data = response.json()
     assert data["result"]["isError"] is True
     assert "No Gmail account connected" in data["result"]["content"][0]["text"]
+
+
+def test_deduplicate_message_parts():
+    from server import deduplicate_message_parts
+
+    # Case 1: Identical text repeated before and after a tool
+    parts = [
+        {"type": "text", "text": "I have set up an event trigger to monitor for new emails."},
+        {"type": "tool", "tool": {"id": "1", "name": "manage_routine"}},
+        {"type": "text", "text": "I have set up an event trigger to monitor for new emails."},
+    ]
+    cleaned = deduplicate_message_parts(parts)
+    assert len(cleaned) == 2
+    assert cleaned[0]["type"] == "tool"
+    assert cleaned[1]["type"] == "text"
+    assert cleaned[1]["text"] == "I have set up an event trigger to monitor for new emails."
+
+    # Case 2: Post-tool text extends pre-tool text
+    parts_subsumed = [
+        {"type": "text", "text": "Checking your emails..."},
+        {"type": "tool", "tool": {"id": "2", "name": "list_messages"}},
+        {"type": "text", "text": "Checking your emails... You received 1 new email from Alex."},
+    ]
+    cleaned_subsumed = deduplicate_message_parts(parts_subsumed)
+    assert len(cleaned_subsumed) == 2
+    assert cleaned_subsumed[0]["type"] == "tool"
+    assert cleaned_subsumed[1]["text"] == "Checking your emails... You received 1 new email from Alex."
+
+    # Case 3: Distinct commentary and final answer should both be kept
+    parts_distinct = [
+        {"type": "text", "text": "Searching your inbox for invoices."},
+        {"type": "tool", "tool": {"id": "3", "name": "search_messages"}},
+        {"type": "text", "text": "Found invoice #1024 from Stripe."},
+    ]
+    cleaned_distinct = deduplicate_message_parts(parts_distinct)
+    assert len(cleaned_distinct) == 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_gmail_token_without_request():
+    from gmail_mcp_server import resolve_user_gmail_token
+
+    # Should safely return (None, None, []) or (None, user_id, []) without throwing
+    token, user_id, scopes = await resolve_user_gmail_token(None, x_user_id="nonexistent_user")
+    assert token is None
+    assert user_id == "nonexistent_user"
+

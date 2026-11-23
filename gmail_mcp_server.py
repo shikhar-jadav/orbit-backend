@@ -339,7 +339,7 @@ GMAIL_MCP_TOOLS: List[Dict[str, Any]] = [
 # Per-User Credential Resolver & Auto-Refresh
 # ------------------------------------------------------------------------------
 async def resolve_user_gmail_token(
-    request: Request,
+    request: Optional[Request] = None,
     authorization: Optional[str] = None,
     x_user_id: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str], List[str]]:
@@ -357,9 +357,9 @@ async def resolve_user_gmail_token(
 
     # 2. Database lookup from Orbit's Neon PostgreSQL store
     target_user_id = x_user_id
-    if not target_user_id:
+    if not target_user_id and request is not None:
         # Check active session if available
-        auth_cookie = request.cookies.get("orbit_auth")
+        auth_cookie = getattr(request, "cookies", {}).get("orbit_auth")
         if auth_cookie:
             try:
                 import auth
