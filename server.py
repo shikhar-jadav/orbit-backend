@@ -431,6 +431,10 @@ async def lifespan(app_instance: FastAPI):
     if proactive_engine:
         await proactive_engine.stop()
         print("[SHUTDOWN] Stopped ProactiveEngine background scheduler.")
+    try:
+        await mcp_client.close_shared_mcp_http_client()
+    except Exception as mcp_close_err:
+        print(f"[SHUTDOWN] MCP HTTP client close skipped ({mcp_close_err}).")
     if checkpoint_connection is not None:
         checkpoint_connection.close()
         checkpoint_connection = None
