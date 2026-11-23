@@ -42,6 +42,57 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_RUN_SECRET_KEY_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "authorization",
+    "api_key",
+    "apikey",
+    "credential",
+    "private_key",
+    "access_key",
+)
+
+
+def redact_run_text(value: Any, max_length: int = 6000) -> str:
+    """Redact common credentials before storing visible automation activity."""
+    text_value = str(value or "")
+    patterns = (
+        (r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[REDACTED]"),
+        (r"(?i)(api[_-]?key\s*[:=]\s*)[^\s,;]+", r"\1[REDACTED]"),
+        (r"\bsk-[A-Za-z0-9_-]{12,}\b", "[REDACTED_API_KEY]"),
+        (r"\bgh[pousr]_[A-Za-z0-9]{20,}\b", "[REDACTED_GITHUB_TOKEN]"),
+        (r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "[REDACTED_SLACK_TOKEN]"),
+        (r"\bAIza[0-9A-Za-z_-]{30,}\b", "[REDACTED_GOOGLE_KEY]"),
+    )
+    for pattern, replacement in patterns:
+        text_value = re.sub(pattern, replacement, text_value)
+    if len(text_value) > max_length:
+        text_value = text_value[:max_length] + "\n… (truncated)"
+    return text_value
+
+
+def safe_run_value(value: Any, key: str = "", depth: int = 0) -> Any:
+    """Make tool/event details safe and bounded before putting them in run history."""
+    if any(part in key.casefold() for part in _RUN_SECRET_KEY_PARTS):
+        return "[REDACTED]"
+    if depth > 5:
+        return "[Nested detail omitted]"
+    if isinstance(value, dict):
+        return {
+            str(item_key)[:120]: safe_run_value(item_value, str(item_key), depth + 1)
+            for item_key, item_value in list(value.items())[:80]
+        }
+    if isinstance(value, (list, tuple)):
+        return [safe_run_value(item, key, depth + 1) for item in list(value)[:80]]
+    if isinstance(value, str):
+        return redact_run_text(value, 4000)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return redact_run_text(value, 1000)
+
+
 @dataclass
 class NormalizedEvent:
     """Provider-independent event delivered to Orbit's event gate."""
@@ -1075,6 +1126,62 @@ class ProactiveStore:
             )
         return run_id
 
+    def append_run_message(
+        self,
+        run_id: str,
+        entry_type: str,
+        title: str,
+        content: str = "",
+        status: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        allowed_types = {"prompt", "trigger", "status", "tool", "assistant", "error"}
+        if entry_type not in allowed_types:
+            raise ValueError("Unsupported routine run message type.")
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """
+                INSERT INTO proactive_run_messages (
+                    run_id, entry_type, status, title, content, details, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+                RETURNING id, run_id, entry_type, status, title, content, details, created_at
+                """,
+                (
+                    run_id,
+                    entry_type,
+                    status,
+                    redact_run_text(title, 180),
+                    redact_run_text(content, 12000),
+                    json.dumps(safe_run_value(details or {}), ensure_ascii=False, default=str),
+                    utc_now_iso(),
+                ),
+            ).fetchone()
+        return dict(row)
+
+    def list_run_messages(self, run_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 500))
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, run_id, entry_type, status, title, content, details, created_at
+                FROM proactive_run_messages
+                WHERE run_id = %s
+                ORDER BY id ASC
+                LIMIT %s
+                """,
+                (run_id, safe_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM proactive_runs WHERE id = %s",
+                (run_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def update_run_status(
         self,
         run_id: str,
@@ -1550,6 +1657,29 @@ class ProactiveEngine:
                 self.execute_routine_isolated(routine_id, trigger_source="schedule")
             )
 
+    def _record_run_message(
+        self,
+        run_id: str,
+        *,
+        entry_type: str,
+        title: str,
+        content: str = "",
+        status: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Best-effort transcript persistence; never break a routine because of logging."""
+        try:
+            self.store.append_run_message(
+                run_id=run_id,
+                entry_type=entry_type,
+                title=title,
+                content=content,
+                status=status,
+                details=details,
+            )
+        except Exception as exc:
+            logger.warning("Could not persist run conversation entry %s: %s", run_id, exc)
+
     async def execute_routine_isolated(
         self,
         routine_id: str,
@@ -1567,6 +1697,35 @@ class ProactiveEngine:
         start_iso = utc_now_iso()
 
         self.store.update_run_status(run_id, status="running", started_at=start_iso)
+        self._record_run_message(
+            run_id,
+            entry_type="prompt",
+            status="ready",
+            title="Routine instruction",
+            content=routine.get("action_prompt") or "",
+        )
+        if event_payload:
+            event_details = {
+                "source": event_payload.get("source"),
+                "event_type": event_payload.get("event_type"),
+                "occurred_at": event_payload.get("occurred_at"),
+                "payload": event_payload.get("payload", event_payload),
+            }
+            self._record_run_message(
+                run_id,
+                entry_type="trigger",
+                status="received",
+                title="Trigger event",
+                content=f"{event_details.get('source') or 'Event'} · {event_details.get('event_type') or 'event'}",
+                details=event_details,
+            )
+        self._record_run_message(
+            run_id,
+            entry_type="status",
+            status="running",
+            title="Execution started",
+            content="Orbit started working on this routine.",
+        )
 
         try:
             # Deliver prompt through isolated agent run or direct response
@@ -1605,7 +1764,52 @@ class ProactiveEngine:
                     ):
                         event_type = agent_event.get("type")
                         event_data = agent_event.get("data", {})
-                        if event_type in ("interrupt", "ask_question"):
+                        if event_type == "provider_selected":
+                            provider_name = event_data.get("provider") or "Model provider"
+                            model_name = event_data.get("model")
+                            self._record_run_message(
+                                run_id,
+                                entry_type="status",
+                                status="completed",
+                                title="Model selected",
+                                content=f"{provider_name}" + (f" · {model_name}" if model_name else ""),
+                            )
+                        elif event_type == "tool_start":
+                            tool_name = str(event_data.get("tool") or "Tool")
+                            self._record_run_message(
+                                run_id,
+                                entry_type="tool",
+                                status="running",
+                                title=f"Running {tool_name}",
+                                content="Orbit started this tool.",
+                                details={
+                                    "tool": tool_name,
+                                    "args": event_data.get("args") or {},
+                                    "tool_call_id": event_data.get("tool_call_id"),
+                                },
+                            )
+                        elif event_type == "tool_end":
+                            tool_name = str(event_data.get("tool") or "Tool")
+                            tool_output = redact_run_text(event_data.get("output", ""), 6000)
+                            self._record_run_message(
+                                run_id,
+                                entry_type="tool",
+                                status="completed",
+                                title=f"Finished {tool_name}",
+                                content=tool_output,
+                                details={
+                                    "tool": tool_name,
+                                    "tool_call_id": event_data.get("tool_call_id"),
+                                },
+                            )
+                        elif event_type in ("interrupt", "ask_question"):
+                            self._record_run_message(
+                                run_id,
+                                entry_type="status",
+                                status="declined",
+                                title="Approval request handled",
+                                content="The background run cannot pause for an interactive approval, so Orbit declined the request.",
+                            )
                             request_id = event_data.get("request_id") or event_data.get("interrupt_id")
                             approval_future = active_interrupts.get(request_id)
                             if approval_future and not approval_future.done():
@@ -1640,6 +1844,20 @@ class ProactiveEngine:
                 duration_ms=duration_ms,
                 result_summary=summary_output,
                 completed_at=completed_iso,
+            )
+            self._record_run_message(
+                run_id,
+                entry_type="assistant",
+                status="completed",
+                title="Orbit's result",
+                content=summary_output,
+            )
+            self._record_run_message(
+                run_id,
+                entry_type="status",
+                status="completed",
+                title="Execution completed",
+                content=f"Finished in {duration_ms:,} ms.",
             )
 
             # Create notification outbox item
@@ -1726,6 +1944,20 @@ class ProactiveEngine:
                 duration_ms=duration_ms,
                 error=error_str,
                 completed_at=completed_iso,
+            )
+            self._record_run_message(
+                run_id,
+                entry_type="error",
+                status="failed",
+                title="Execution failed",
+                content=error_str,
+            )
+            self._record_run_message(
+                run_id,
+                entry_type="status",
+                status="failed",
+                title="Execution stopped",
+                content=f"Orbit stopped after {duration_ms:,} ms.",
             )
             logger.error(f"Failed to execute routine '{routine['name']}': {e}", exc_info=True)
             return {"status": "failed", "run_id": run_id, "error": error_str}
