@@ -138,6 +138,10 @@ async def test_proactive_engine_execution():
         runs = store.list_runs(routine["id"])
         assert len(runs) == 1
         assert runs[0]["status"] == "completed"
+        transcript = store.list_run_messages(runs[0]["id"])
+        assert any(item["entry_type"] == "prompt" for item in transcript)
+        assert any(item["entry_type"] == "assistant" for item in transcript)
+        assert transcript[-1]["status"] == "completed"
 
         # Verify notification created in outbox
         notifs = store.list_notifications("user_abc")
@@ -196,6 +200,9 @@ async def test_routine_type_execution_separation():
 
         class MockAgent:
             async def astream_run(self, user_query, **kwargs):
+                yield {"type": "provider_selected", "data": {"provider": "Mock", "model": "mock-model"}}
+                yield {"type": "tool_start", "data": {"tool": "search_repo", "args": {"query": "issue #42"}}}
+                yield {"type": "tool_end", "data": {"tool": "search_repo", "output": "Found issue #42."}}
                 yield {"type": "done", "data": {"content": "Autonomous task executed successfully."}}
 
         engine = ProactiveEngine(store=store, agent=MockAgent())
@@ -221,6 +228,11 @@ async def test_routine_type_execution_separation():
         )
         res_task = await engine.execute_routine_isolated(task["id"], trigger_source="test")
         assert res_task["summary"] == "Autonomous task executed successfully."
+        task_run = store.list_runs(task["id"])[0]
+        task_transcript = store.list_run_messages(task_run["id"])
+        assert any(item["entry_type"] == "tool" and item["status"] == "running" for item in task_transcript)
+        assert any(item["entry_type"] == "tool" and item["status"] == "completed" for item in task_transcript)
+        assert any(item["entry_type"] == "assistant" for item in task_transcript)
 
 
 @pytest.mark.asyncio
