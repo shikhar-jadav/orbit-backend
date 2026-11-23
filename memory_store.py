@@ -413,7 +413,7 @@ class MemoryStoreManager:
     ) -> List[Any]:
         """Async search items under a namespace prefix with vector or keyword search."""
         # 1. Semantic Vector Search via Qdrant Cloud
-        if query and getattr(self, "qdrant_vector", None) and self.qdrant_vector.is_ready:
+        if query and getattr(self, "qdrant_vector", None) and self.qdrant_vector.supports_semantic_search:
             try:
                 user_id = namespace_prefix[0] if namespace_prefix else None
                 mem_type = namespace_prefix[1] if len(namespace_prefix) > 1 else None
