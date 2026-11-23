@@ -3071,12 +3071,17 @@ async def continue_routine_run_in_chat_endpoint(
         content=response_content,
     )
     chat_store.rename_thread(thread_id, title, user_id=current_user["user_id"])
+    thread_data = chat_store.get_thread(
+        thread_id,
+        user_id=current_user["user_id"],
+        include_extras=False,
+    )
+    thread_metadata = (thread_data or {}).get("thread") or created
     return {
         "thread": {
-            **created,
-            "title": title,
+            **thread_metadata,
             "preview": response_content[:240],
-            "message_count": 2,
+            "message_count": len((thread_data or {}).get("messages") or []),
         }
     }
 
