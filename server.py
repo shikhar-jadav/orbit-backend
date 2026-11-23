@@ -3830,7 +3830,8 @@ async def start_event_integration_oauth_endpoint(
                 "prompt": "select_account consent",
                 "include_granted_scopes": "true",
                 "state": state,
-            }
+            },
+            quote_via=urllib.parse.quote,
         )
 
     now = time.time()
