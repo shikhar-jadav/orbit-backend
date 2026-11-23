@@ -155,6 +155,10 @@ def test_routines_api_crud(test_client, auth_headers):
     assert saved_assistant["content"]
     assert any(part.get("type") == "context" for part in saved_assistant["parts"])
     assert any(part.get("type") == "text" for part in saved_assistant["parts"])
+    continued_history = server.history_for_document_follow_up(
+        persisted_thread["messages"], None
+    )
+    assert "historical Orbit autonomous routine execution" in continued_history[1]["content"]
 
     # 6. Notifications API
     res_notifs = test_client.get("/api/notifications", headers=headers)
