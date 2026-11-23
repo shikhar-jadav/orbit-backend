@@ -2110,6 +2110,7 @@ class EventRoutineCreateRequest(BaseModel):
     source: str = Field(default="webhook", min_length=1, max_length=40)
     filters: Optional[Dict[str, Any]] = None
     repository: Optional[str] = Field(default=None, max_length=250)
+    provider_account_id: Optional[str] = Field(default=None, max_length=200)
     team_id: Optional[str] = Field(default=None, max_length=100)
     channel_name: Optional[str] = Field(default=None, max_length=100)
     channel_id: Optional[str] = Field(default=None, max_length=100)
@@ -2468,15 +2469,24 @@ async def create_event_routine_endpoint(
             or repo_name in {".", ".."}
         ):
             raise HTTPException(status_code=400, detail="Use a valid GitHub owner/repository name.")
-        account = provider_integration_store.get_account(user_id, "github")
+        account = provider_integration_store.get_account(
+            user_id, "github", body.provider_account_id
+        )
         if not account:
             raise HTTPException(status_code=409, detail="Connect GitHub before creating a GitHub trigger.")
     elif source == "slack":
         if not os.getenv("SLACK_SIGNING_SECRET", "").strip():
             raise HTTPException(status_code=503, detail="Slack event signing is not configured.")
-        account = provider_integration_store.get_account(user_id, "slack", team_id or None)
+        if os.getenv("SLACK_EVENTS_READY", "").strip().lower() != "true":
+            raise HTTPException(
+                status_code=503,
+                detail="Slack event delivery is not enabled for this Orbit deployment yet. Ask the workspace administrator to finish the one-time Slack app setup.",
+            )
+        account = provider_integration_store.get_account(
+            user_id, "slack", body.provider_account_id or team_id or None
+        )
         if not account:
-            raise HTTPException(status_code=409, detail="Connect Slack before creating a Slack trigger.")
+            raise HTTPException(status_code=409, detail="Connect a Slack workspace before creating a Slack trigger.")
         team_id = account["provider_account_id"]
         event_type = body.event_type.strip().lower()
         if event_type not in {"app_mention", "message.channels", "reaction_added"}:
@@ -2534,9 +2544,11 @@ async def create_event_routine_endpoint(
                 status_code=503,
                 detail="Configure positive ORBIT_GMAIL_HISTORY_PAGE_LIMIT and ORBIT_GMAIL_MESSAGE_LIMIT values.",
             )
-        account = provider_integration_store.get_account(user_id, "gmail")
+        account = provider_integration_store.get_account(
+            user_id, "gmail", body.provider_account_id
+        )
         if not account:
-            raise HTTPException(status_code=409, detail="Connect Gmail before creating a Gmail trigger.")
+            raise HTTPException(status_code=409, detail="Connect a Gmail account before creating a Gmail trigger.")
 
     webhook_token = secrets.token_urlsafe(24) if source == "webhook" else None
     webhook_secret = secrets.token_hex(32) if source in {"webhook", "github"} else None
@@ -2558,6 +2570,7 @@ async def create_event_routine_endpoint(
 
     trigger_definition = {
         "source": source,
+        "provider_account_id": account["provider_account_id"] if account else None,
         "event_type": body.event_type.strip(),
         "when": body.when_to_run.strip(),
         "filters": filters,
@@ -3606,6 +3619,10 @@ async def event_integration_status_endpoint(
         "slack": {
             "configured": all(_event_oauth_config("slack").values()),
             "signing_configured": bool(os.getenv("SLACK_SIGNING_SECRET", "").strip()),
+            "events_ready": (
+                bool(os.getenv("SLACK_SIGNING_SECRET", "").strip())
+                and os.getenv("SLACK_EVENTS_READY", "").strip().lower() == "true"
+            ),
             "events_url": f"{base_url}/api/integrations/slack/events" if base_url else None,
             "accounts": [item for item in accounts if item["provider"] == "slack"],
         },
@@ -3617,9 +3634,124 @@ async def event_integration_status_endpoint(
                 and os.getenv("GMAIL_PUBSUB_PUSH_EMAIL", "").strip()
             ),
             "pubsub_limits_configured": _gmail_pubsub_limits() is not None,
+            "events_ready": (
+                bool(
+                    os.getenv("GMAIL_PUBSUB_TOPIC", "").strip()
+                    and os.getenv("GMAIL_PUBSUB_AUDIENCE", "").strip()
+                    and os.getenv("GMAIL_PUBSUB_PUSH_EMAIL", "").strip()
+                )
+                and _gmail_pubsub_limits() is not None
+            ),
             "accounts": [item for item in accounts if item["provider"] == "gmail"],
         },
     }
+
+
+@app.get("/api/integrations/github/repositories")
+async def list_github_event_repositories_endpoint(
+    account_id: str,
+    current_user: Dict[str, Any] = Depends(require_user),
+):
+    account = provider_integration_store.get_account(
+        current_user["user_id"], "github", account_id
+    )
+    if not account:
+        raise HTTPException(status_code=404, detail="Connect this GitHub account first.")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                "https://api.github.com/user/repos",
+                headers={
+                    "Authorization": f"Bearer {account['access_token']}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                params={
+                    "per_page": 100,
+                    "sort": "updated",
+                    "affiliation": "owner,collaborator,organization_member",
+                },
+            )
+        if response.status_code == 401:
+            raise HTTPException(
+                status_code=401,
+                detail="GitHub rejected this connection. Reconnect the account and try again.",
+            )
+        response.raise_for_status()
+        payload = response.json()
+        repositories = [
+            {
+                "id": item.get("id"),
+                "full_name": item.get("full_name"),
+                "name": item.get("name"),
+                "private": bool(item.get("private")),
+                "default_branch": item.get("default_branch"),
+                "permissions": item.get("permissions") or {},
+                "can_manage_webhooks": bool((item.get("permissions") or {}).get("admin")),
+            }
+            for item in payload
+            if isinstance(item, dict) and item.get("full_name")
+        ]
+        return {"repositories": repositories}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail="Could not load repositories from GitHub."
+        ) from exc
+
+
+@app.get("/api/integrations/slack/channels")
+async def list_slack_event_channels_endpoint(
+    account_id: str,
+    current_user: Dict[str, Any] = Depends(require_user),
+):
+    account = provider_integration_store.get_account(
+        current_user["user_id"], "slack", account_id
+    )
+    if not account:
+        raise HTTPException(status_code=404, detail="Connect this Slack workspace first.")
+    channels: list[dict[str, Any]] = []
+    cursor: Optional[str] = None
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for _ in range(5):
+                params: Dict[str, Any] = {
+                    "types": "public_channel,private_channel",
+                    "exclude_archived": "true",
+                    "limit": 200,
+                }
+                if cursor:
+                    params["cursor"] = cursor
+                response = await client.get(
+                    "https://slack.com/api/conversations.list",
+                    headers={"Authorization": f"Bearer {account['access_token']}"},
+                    params=params,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not payload.get("ok"):
+                    raise RuntimeError(str(payload.get("error") or "Slack channel lookup failed."))
+                for item in payload.get("channels", []):
+                    if isinstance(item, dict) and item.get("id") and item.get("name"):
+                        channels.append(
+                            {
+                                "id": item["id"],
+                                "name": item["name"],
+                                "is_member": bool(item.get("is_member")),
+                                "is_private": bool(item.get("is_private")),
+                            }
+                        )
+                cursor = (
+                    (payload.get("response_metadata") or {}).get("next_cursor") or ""
+                ).strip()
+                if not cursor:
+                    break
+        return {"channels": channels}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail="Could not load channels from Slack."
+        ) from exc
 
 
 @app.post("/api/integrations/{provider}/oauth/start")
@@ -3879,6 +4011,7 @@ async def event_integration_oauth_callback_endpoint(
 @app.delete("/api/integrations/{provider}")
 async def disconnect_event_integration_endpoint(
     provider: str,
+    account_id: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(require_user),
 ):
     if provider not in {"github", "slack", "gmail"}:
@@ -3890,12 +4023,16 @@ async def disconnect_event_integration_endpoint(
             status_code=409,
             detail="Delete GitHub event routines first so Orbit can remove their repository webhooks.",
         )
+    accounts = [
+        account
+        for account in provider_integration_store.list_accounts(provider)
+        if account["user_id"] == current_user["user_id"]
+        and (not account_id or account["provider_account_id"] == account_id)
+    ]
+    if account_id and not accounts:
+        raise HTTPException(status_code=404, detail="Connected account not found.")
+
     if provider == "gmail":
-        accounts = [
-            account
-            for account in provider_integration_store.list_accounts("gmail")
-            if account["user_id"] == current_user["user_id"]
-        ]
         for account in accounts:
             account = await _gmail_access_token(account)
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -3912,11 +4049,18 @@ async def disconnect_event_integration_endpoint(
                 account["user_id"], account["provider_account_id"]
             )
     if provider in {"slack", "gmail"}:
+        selected_ids = {account["provider_account_id"] for account in accounts}
         for subscription in proactive_store.list_subscriptions(user_id=current_user["user_id"]):
-            if subscription["provider"] == provider and subscription["status"] == "active":
+            if (
+                subscription["provider"] == provider
+                and subscription["status"] == "active"
+                and subscription.get("provider_subscription_id") in selected_ids
+            ):
                 proactive_store.update_subscription(subscription["id"], status="disabled")
                 proactive_store.update_routine(subscription["routine_id"], enabled=False)
-    deleted = provider_integration_store.delete_account(current_user["user_id"], provider)
+    deleted = provider_integration_store.delete_account(
+        current_user["user_id"], provider, account_id
+    )
     return {"disconnected": deleted}
 
 

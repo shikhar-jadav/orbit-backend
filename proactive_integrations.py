@@ -162,12 +162,19 @@ class ProviderIntegrationStore:
             for row in rows
         ]
 
-    def delete_account(self, user_id: str, provider: str) -> bool:
+    def delete_account(
+        self,
+        user_id: str,
+        provider: str,
+        provider_account_id: Optional[str] = None,
+    ) -> bool:
+        query = "DELETE FROM proactive_provider_accounts WHERE user_id = %s AND provider = %s"
+        params: list[Any] = [user_id, provider]
+        if provider_account_id:
+            query += " AND provider_account_id = %s"
+            params.append(provider_account_id)
         with self._lock, self._connection() as conn:
-            cur = conn.execute(
-                "DELETE FROM proactive_provider_accounts WHERE user_id = %s AND provider = %s",
-                (user_id, provider),
-            )
+            cur = conn.execute(query, params)
             return cur.rowcount > 0
 
     def get_gmail_watch_state(
