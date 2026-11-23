@@ -234,6 +234,22 @@ async def test_routine_type_execution_separation():
         assert any(item["entry_type"] == "tool" and item["status"] == "completed" for item in task_transcript)
         assert any(item["entry_type"] == "assistant" for item in task_transcript)
 
+        # Secrets in tool details and common bearer/API-key strings must not be stored.
+        secret_entry = store.append_run_message(
+            run_id=task_run["id"],
+            entry_type="tool",
+            status="completed",
+            title="Credential check",
+            content="Authorization: Bearer very-secret-token sk-thisisademokeystring",
+            details={"access_token": "sensitive-value", "safe_query": "issue #42"},
+        )
+        stored_run_messages = store.list_run_messages(task_run["id"])
+        persisted_secret = next(item for item in stored_run_messages if item["id"] == secret_entry["id"])
+        assert "very-secret-token" not in persisted_secret["content"]
+        assert "sk-thisisademokeystring" not in persisted_secret["content"]
+        assert persisted_secret["details"]["access_token"] == "[REDACTED]"
+        assert persisted_secret["details"]["safe_query"] == "issue #42"
+
 
 @pytest.mark.asyncio
 async def test_event_filtering_prevents_agent_invocation():
