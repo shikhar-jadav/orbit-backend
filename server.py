@@ -3789,6 +3789,7 @@ async def start_event_integration_oauth_endpoint(
             detail="Set INTEGRATION_TOKEN_ENCRYPTION_KEY before connecting provider accounts.",
         )
     redirect_uri = _event_oauth_redirect_uri(provider)
+    print(f'[OAUTH] Provider {provider} redirect_uri: {redirect_uri}', flush=True)
     if provider == "github":
         auth_url = "https://github.com/login/oauth/authorize?" + urllib.parse.urlencode(
             {
