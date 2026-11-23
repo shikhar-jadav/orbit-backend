@@ -564,8 +564,9 @@ async def _post_mcp_jsonrpc(
     timeout: Optional[float] = None,
 ) -> Tuple[int, str, httpx.Headers, Optional[Dict[str, Any]]]:
     """POST JSON-RPC via Streamable HTTP without hanging on open text/event-stream responses."""
+    request_options = {"timeout": timeout} if timeout is not None else {}
     async with client.stream(
-        "POST", mcp_url, headers=headers, json=body, timeout=timeout
+        "POST", mcp_url, headers=headers, json=body, **request_options
     ) as resp:
         status = resp.status_code
         reason = resp.reason_phrase or f"HTTP {status}"
@@ -1086,8 +1087,37 @@ async def call_mcp_tool(
             if c_status >= 400:
                 raise RuntimeError(f"MCP tool call failed with HTTP {c_status} ({c_reason})")
             return _format_mcp_call_payload(call_payload)
-        # The remote server expired/rejected this session. Re-initialize below.
+
+        # Do not replay a tool call automatically after an expired session: the
+        # remote server may have performed the action before returning an error.
+        # Re-establish the session for the next tool call and report the current
+        # call as not completed, avoiding accidental duplicate writes/sends.
         _MCP_SESSION_CACHE.pop(cache_key, None)
+        try:
+            status, reason, _, init_payload, replacement_session_id = await _init_streamable_session(
+                client, url, headers
+            )
+            if status == 200 and not _extract_rpc_error(init_payload):
+                if replacement_session_id:
+                    _cache_mcp_session(cache_key, replacement_session_id)
+                    rpc_headers = {**headers, "Mcp-Session-Id": replacement_session_id}
+                else:
+                    rpc_headers = dict(headers)
+                if init_payload and isinstance(init_payload.get("result"), dict):
+                    try:
+                        await client.post(
+                            url,
+                            headers=rpc_headers,
+                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                            timeout=timeout,
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        raise RuntimeError(
+            "MCP session expired. Orbit reconnected the service, but did not repeat this tool action. Please retry it."
+        )
 
     status, reason, _, init_payload, session_id = await _init_streamable_session(
         client, url, headers
