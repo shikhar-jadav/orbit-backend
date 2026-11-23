@@ -3065,7 +3065,8 @@ async def continue_routine_run_in_chat_endpoint(
             return response_for_thread(imported_thread)
 
     thread_created = False
-    thread_id = str(routine.get("chat_thread_id") or "")
+    expected_thread_id = str(routine.get("chat_thread_id") or "")
+    thread_id = expected_thread_id
     thread_data = (
         chat_store.get_thread(
             thread_id,
@@ -3080,36 +3081,50 @@ async def continue_routine_run_in_chat_endpoint(
             title=thread_title,
             user_id=current_user["user_id"],
         )
-        thread_id = created["thread_id"]
-        thread_created = True
+        created_thread_id = created["thread_id"]
         linked_thread_id = proactive_store.set_routine_chat_thread(
             routine_id,
             current_user["user_id"],
-            thread_id,
+            created_thread_id,
+            expected_thread_id=expected_thread_id or None,
         )
-        if not linked_thread_id:
-            chat_store.delete_thread(thread_id, user_id=current_user["user_id"])
-            raise HTTPException(
-                status_code=409,
-                detail="Could not link the routine conversation.",
-            )
-        thread_id = linked_thread_id
-        if thread_id != created["thread_id"]:
+        if linked_thread_id:
+            thread_id = linked_thread_id
+            thread_created = True
+            if thread_id != created_thread_id:
+                chat_store.delete_thread(
+                    created_thread_id,
+                    user_id=current_user["user_id"],
+                )
+                thread_data = chat_store.get_thread(
+                    thread_id,
+                    user_id=current_user["user_id"],
+                    include_extras=False,
+                )
+                thread_created = False
+        else:
+            # Another first-follow-up request won the compare-and-set. Reuse
+            # its thread rather than making a second sidebar conversation.
             chat_store.delete_thread(
-                created["thread_id"],
+                created_thread_id,
                 user_id=current_user["user_id"],
             )
-            thread_data = chat_store.get_thread(
-                thread_id,
-                user_id=current_user["user_id"],
-                include_extras=False,
+            refreshed_routine = proactive_store.get_routine(routine_id) or {}
+            thread_id = str(refreshed_routine.get("chat_thread_id") or "")
+            thread_data = (
+                chat_store.get_thread(
+                    thread_id,
+                    user_id=current_user["user_id"],
+                    include_extras=False,
+                )
+                if thread_id
+                else None
             )
             if not thread_data:
                 raise HTTPException(
                     status_code=409,
                     detail="The routine conversation is being created. Please retry.",
                 )
-            thread_created = False
 
     run_messages = proactive_store.list_run_messages(run_id)
     prompt_entry = next(
