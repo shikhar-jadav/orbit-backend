@@ -121,6 +121,35 @@ def test_routines_api_crud(test_client, auth_headers):
     res_runs = test_client.get(f"/api/routines/{routine_id}/runs", headers=headers)
     assert res_runs.status_code == 200
     assert len(res_runs.json()["runs"]) >= 1
+    run_id = res_runs.json()["runs"][0]["id"]
+
+    # 5b. Inspect the isolated run conversation.
+    res_detail = test_client.get(
+        f"/api/routines/{routine_id}/runs/{run_id}",
+        headers=headers,
+    )
+    assert res_detail.status_code == 200
+    assert res_detail.json()["run"]["id"] == run_id
+    assert any(
+        item["entry_type"] == "assistant"
+        for item in res_detail.json()["messages"]
+    )
+
+    # Continue the run in a normal chat without reusing the automation transcript.
+    res_continue = test_client.post(
+        f"/api/routines/{routine_id}/runs/{run_id}/continue",
+        headers=headers,
+    )
+    assert res_continue.status_code == 200
+    continued_thread = res_continue.json()["thread"]
+    assert continued_thread["title"].startswith("Follow-up:")
+    persisted_thread = server.chat_store.get_thread(
+        continued_thread["thread_id"],
+        user_id=user_id,
+        include_extras=False,
+    )
+    assert persisted_thread is not None
+    assert len(persisted_thread["messages"]) == 2
 
     # 6. Notifications API
     res_notifs = test_client.get("/api/notifications", headers=headers)
