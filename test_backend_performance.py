@@ -110,3 +110,49 @@ def test_mcp_tool_call_reuses_cached_session(monkeypatch):
         assert call.kwargs["rpc_id"] == 3
 
     asyncio.run(run())
+
+
+
+def test_expired_mcp_session_is_reinitialized_without_replaying_tool(monkeypatch):
+    class DummyClient:
+        async def post(self, *args, **kwargs):
+            return httpx.Response(200, request=httpx.Request("POST", "https://mcp.example.com/mcp"))
+
+    async def run():
+        url = "https://mcp.example.com/mcp"
+        headers = mcp_client._base_mcp_headers({"Authorization": "Bearer test-user"})
+        key = mcp_client._mcp_session_cache_key(url, headers)
+        monkeypatch.setattr(mcp_client, "_MCP_SESSION_CACHE", {})
+        mcp_client._cache_mcp_session(key, "expired-session")
+        monkeypatch.setattr(mcp_client, "_get_shared_mcp_http_client", lambda: DummyClient())
+
+        post = AsyncMock(return_value=(404, "Not Found", httpx.Headers(), None))
+        initialize = AsyncMock(
+            return_value=(
+                200,
+                "OK",
+                httpx.Headers(),
+                {"result": {"protocolVersion": mcp_client.MCP_PROTOCOL_VERSION}},
+                "fresh-session",
+            )
+        )
+        monkeypatch.setattr(mcp_client, "_post_mcp_jsonrpc", post)
+        monkeypatch.setattr(mcp_client, "_init_streamable_session", initialize)
+
+        try:
+            await mcp_client.call_mcp_tool(
+                url,
+                "send_email",
+                {"to": "recipient@example.com"},
+                custom_headers={"Authorization": "Bearer test-user"},
+            )
+        except RuntimeError as exc:
+            assert "did not repeat this tool action" in str(exc)
+        else:
+            raise AssertionError("An expired session should report that the action was not replayed.")
+
+        post.assert_awaited_once()
+        initialize.assert_awaited_once()
+        assert mcp_client._get_cached_mcp_session(key) == "fresh-session"
+
+    asyncio.run(run())
