@@ -1328,7 +1328,7 @@ def history_for_document_follow_up(
             filenames = ", ".join(
                 attachment["filename"] for attachment in message["attachments"]
             )
-            content = f"{content}\\n[Attached file(s): {filenames}]"
+            content = f"{content}\n[Attached file(s): {filenames}]"
 
         # Routine-run transcripts use a non-rendered context part to preserve
         # full tool inputs/outputs for the next agent turn without duplicating
@@ -1342,7 +1342,7 @@ def history_for_document_follow_up(
             and part.get("text")
         ]
         if hidden_context:
-            content = content + "\\n\\n" + "\\n\\n".join(hidden_context)
+            content = content + "\n\n" + "\n\n".join(hidden_context)
         history.append({"role": message["role"], "content": content})
     return history
 
