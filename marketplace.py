@@ -29,25 +29,7 @@ GMAIL_MCP_CONNECTOR: Dict[str, Any] = {
         "Search Mailbox",
         "Sandboxed Attachments",
     ],
-    "configFields": [
-        {
-            "key": "mcp_url",
-            "label": "Shared MCP Service URL",
-            "type": "text",
-            "required": False,
-            "placeholder": "http://127.0.0.1:8000/api/mcp/gmail",
-            "defaultValue": "http://127.0.0.1:8000/api/mcp/gmail",
-            "helpText": "URL of the co-hosted Gmail MCP service on this backend (/api/mcp/gmail) or a custom host.",
-        },
-        {
-            "key": "service_secret",
-            "label": "Service Secret (Optional)",
-            "type": "password",
-            "required": False,
-            "placeholder": "Enter ORBIT_SERVICE_SECRET if configured",
-            "helpText": "Optional shared secret passed via X-Orbit-Secret header.",
-        },
-    ],
+    "configFields": [],
 }
 
 AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR]
