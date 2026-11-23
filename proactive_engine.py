@@ -685,18 +685,35 @@ class ProactiveStore:
             return res
 
     def set_routine_chat_thread(
-        self, routine_id: str, user_id: str, thread_id: str
+        self,
+        routine_id: str,
+        user_id: str,
+        thread_id: str,
+        expected_thread_id: Optional[str] = None,
     ) -> Optional[str]:
+        # Use compare-and-set so concurrent first follow-ups cannot replace
+        # the routine's thread after another request has already created it.
         with self._lock, self._connection() as conn:
-            row = conn.execute(
-                """
-                UPDATE proactive_routines
-                SET chat_thread_id = %s, updated_at = %s
-                WHERE id = %s AND user_id = %s
-                RETURNING chat_thread_id
-                """,
-                (thread_id, utc_now_iso(), routine_id, user_id),
-            ).fetchone()
+            if expected_thread_id is None:
+                row = conn.execute(
+                    """
+                    UPDATE proactive_routines
+                    SET chat_thread_id = %s, updated_at = %s
+                    WHERE id = %s AND user_id = %s AND chat_thread_id IS NULL
+                    RETURNING chat_thread_id
+                    """,
+                    (thread_id, utc_now_iso(), routine_id, user_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    UPDATE proactive_routines
+                    SET chat_thread_id = %s, updated_at = %s
+                    WHERE id = %s AND user_id = %s AND chat_thread_id = %s
+                    RETURNING chat_thread_id
+                    """,
+                    (thread_id, utc_now_iso(), routine_id, user_id, expected_thread_id),
+                ).fetchone()
         return str(row["chat_thread_id"]) if row else None
 
     def get_routine_by_webhook(self, token: str) -> Optional[Dict[str, Any]]:
