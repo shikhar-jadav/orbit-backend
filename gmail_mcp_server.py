@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import email
+import hmac
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import json
@@ -342,39 +343,46 @@ async def resolve_user_gmail_token(
     request: Optional[Request] = None,
     authorization: Optional[str] = None,
     x_user_id: Optional[str] = None,
+    allow_internal_user_id: bool = False,
 ) -> Tuple[Optional[str], Optional[str], List[str]]:
     """
-    Resolve (access_token, user_id, scopes) from request context.
-    Prioritizes:
-    1. Direct Bearer token in Authorization header.
-    2. Stored encrypted credentials in Neon PostgreSQL for x_user_id.
+    Resolve credentials for one Orbit user.
+
+    Internal X-User-ID routing is accepted only after the RPC handler has
+    authenticated the caller with ORBIT_SERVICE_SECRET. Browser requests are
+    resolved from the signed Orbit session cookie. A direct Google Bearer token
+    remains supported for standalone MCP clients.
     """
-    # 1. Direct Bearer Token
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization[7:].strip()
-        user_id = x_user_id or f"user_{token[:12]}"
-        return token, user_id, ["mail.google.com"]
+        if token:
+            return token, None, ["mail.google.com"]
 
-    # 2. Database lookup from Orbit's Neon PostgreSQL store
-    target_user_id = x_user_id
+    target_user_id = x_user_id if (allow_internal_user_id and x_user_id) else None
     if not target_user_id and request is not None:
-        # Check active session if available
-        auth_cookie = getattr(request, "cookies", {}).get("orbit_auth")
+        auth_cookie = request.cookies.get("orbit_auth")
         if auth_cookie:
             try:
                 import auth
                 session_user = auth.get_user_from_token(auth_cookie)
                 if session_user:
                     target_user_id = session_user.get("user_id")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Could not resolve Orbit session for Gmail MCP: %s", exc)
 
     if not target_user_id:
         return None, None, []
 
     try:
-        from proactive_integrations import ProviderIntegrationStore
-        pis = ProviderIntegrationStore()
+        # Reuse the already-initialized, encrypted application store. Creating a
+        # new ProviderIntegrationStore here is invalid (it requires the shared
+        # PostgresDatabase) and silently made every stored Gmail account invisible.
+        from server import provider_integration_store
+        pis = provider_integration_store
+        if pis is None:
+            logger.error("Gmail MCP requested before provider integration store initialization")
+            return None, target_user_id, []
+
         account = pis.get_account(target_user_id, "gmail")
         if not account:
             return None, target_user_id, []
@@ -384,48 +392,49 @@ async def resolve_user_gmail_token(
         scopes = account.get("scopes") or []
         metadata = account.get("metadata") or {}
         expires_at = metadata.get("expires_at")
-
         now = int(time.time())
-        # Refresh if expired or within 60s
+
         if refresh_token and expires_at and int(expires_at) <= now + 60:
-            client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
-            client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+            client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+            client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
             if client_id and client_secret:
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        ref_res = await client.post(
-                            "https://oauth2.googleapis.com/token",
-                            data={
-                                "client_id": client_id,
-                                "client_secret": client_secret,
-                                "refresh_token": refresh_token,
-                                "grant_type": "refresh_token",
-                            },
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    refresh_response = await client.post(
+                        "https://oauth2.googleapis.com/token",
+                        data={
+                            "client_id": client_id,
+                            "client_secret": client_secret,
+                            "refresh_token": refresh_token,
+                            "grant_type": "refresh_token",
+                        },
+                    )
+                if refresh_response.is_success:
+                    refresh_data = refresh_response.json()
+                    new_access_token = refresh_data.get("access_token")
+                    if new_access_token:
+                        metadata["expires_at"] = now + int(refresh_data.get("expires_in") or 3600)
+                        pis.save_account(
+                            user_id=target_user_id,
+                            provider="gmail",
+                            provider_account_id=account.get("provider_account_id", ""),
+                            account_name=account.get("account_name", ""),
+                            access_token=new_access_token,
+                            refresh_token=refresh_token,
+                            scopes=scopes,
+                            metadata=metadata,
                         )
-                        if ref_res.is_success:
-                            ref_data = ref_res.json()
-                            new_access_token = ref_data.get("access_token")
-                            new_expires = now + int(ref_data.get("expires_in") or 3600)
-                            metadata["expires_at"] = new_expires
-                            pis.save_account(
-                                user_id=target_user_id,
-                                provider="gmail",
-                                provider_account_id=account.get("provider_account_id", ""),
-                                account_name=account.get("account_name", ""),
-                                access_token=new_access_token,
-                                refresh_token=refresh_token,
-                                scopes=scopes,
-                                metadata=metadata,
-                            )
-                            access_token = new_access_token
-                except Exception as ref_err:
-                    logger.warning("Token refresh error for %s: %s", target_user_id, ref_err)
+                        access_token = new_access_token
+                else:
+                    logger.warning(
+                        "Gmail token refresh failed for user %s (HTTP %s)",
+                        target_user_id,
+                        refresh_response.status_code,
+                    )
 
         return access_token, target_user_id, scopes
     except Exception as exc:
-        logger.error("Error resolving credentials for %s: %s", target_user_id, exc)
+        logger.exception("Error resolving Gmail credentials for user %s: %s", target_user_id, exc)
         return None, target_user_id, []
-
 
 # ------------------------------------------------------------------------------
 # Gmail API Execution Handlers
@@ -743,10 +752,15 @@ async def gmail_mcp_rpc_handler(
     Standard Streamable HTTP JSON-RPC 2.0 endpoint for Gmail MCP tools.
     Fully multi-user with isolated per-user execution and automatic token refresh.
     """
-    # Optional service secret check
-    service_secret = os.getenv("ORBIT_SERVICE_SECRET")
-    if service_secret and x_orbit_secret and x_orbit_secret != service_secret:
-        raise HTTPException(status_code=403, detail="Invalid X-Orbit-Secret")
+    # X-User-ID is an internal routing hint, never an authentication method.
+    # Require the shared service secret whenever a caller supplies it.
+    service_secret = os.getenv("ORBIT_SERVICE_SECRET", "").strip()
+    internal_user_routing = bool(x_user_id)
+    if internal_user_routing:
+        if not service_secret or not x_orbit_secret or not hmac.compare_digest(
+            x_orbit_secret, service_secret
+        ):
+            raise HTTPException(status_code=403, detail="Authenticated internal service access is required.")
 
     try:
         body = await request.json()
@@ -785,7 +799,10 @@ async def gmail_mcp_rpc_handler(
 
     # Resolve user credentials for tools/list and tools/call
     access_token, user_id, scopes = await resolve_user_gmail_token(
-        request, authorization=authorization, x_user_id=x_user_id
+        request,
+        authorization=authorization,
+        x_user_id=x_user_id,
+        allow_internal_user_id=internal_user_routing,
     )
 
     # 3. tools/list
