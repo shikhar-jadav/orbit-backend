@@ -7,9 +7,51 @@ SKILLS_DIR = BASE_DIR / ".agents" / "skills"
 SKILLS_LOCK_PATH = BASE_DIR / "skills-lock.json"
 
 # ------------------------------------------------------------------------------
-# Connectors Catalog (Empty - Clean Marketplace)
+# Connectors Catalog
 # ------------------------------------------------------------------------------
-AVAILABLE_CONNECTORS: List[Dict[str, Any]] = []
+GMAIL_MCP_CONNECTOR: Dict[str, Any] = {
+    "id": "gmail-mcp",
+    "name": "Gmail (Shared Multi-User MCP)",
+    "category": "Email & Productivity",
+    "description": (
+        "Multi-user shared Gmail MCP service powered by klodr/gmail-mcp. "
+        "Allows Orbit agents to inspect threads, compose drafts, send messages, "
+        "manage labels, and search mailboxes with isolated per-user security."
+    ),
+    "icon": "mail",
+    "badge": "Multi-User",
+    "authType": "OAuth / Bearer",
+    "website": "https://github.com/klodr/gmail-mcp",
+    "capabilities": [
+        "Read Emails & Threads",
+        "Compose & Send Emails",
+        "Create & Update Drafts",
+        "Manage Labels & Filters",
+        "Search Mailbox",
+        "Sandboxed Attachments",
+    ],
+    "configFields": [
+        {
+            "key": "mcp_url",
+            "label": "Shared MCP Service URL",
+            "type": "text",
+            "required": False,
+            "placeholder": "https://orbit-gmail-mcp.onrender.com/mcp",
+            "defaultValue": "http://localhost:3001/mcp",
+            "helpText": "URL of your deployed multi-user Gmail MCP service on Render or localhost.",
+        },
+        {
+            "key": "service_secret",
+            "label": "Service Secret (Optional)",
+            "type": "password",
+            "required": False,
+            "placeholder": "Enter ORBIT_SERVICE_SECRET if configured",
+            "helpText": "Optional shared secret passed via X-Orbit-Secret header.",
+        },
+    ],
+}
+
+AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR]
 
 
 def register_connector(connector: Dict[str, Any]) -> None:

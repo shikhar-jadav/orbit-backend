@@ -889,6 +889,57 @@ class ReActAgent:
                 connectors = chat_store.get_personal_connectors(
                     target_user_id, include_secrets=True
                 )
+
+                try:
+                    import marketplace
+                    mp_connectors = marketplace.list_connectors_with_status(chat_store, user_id=target_user_id)
+                    for mp_c in mp_connectors:
+                        if not mp_c.get("is_enabled"):
+                            continue
+                        if mp_c.get("id") == "gmail-mcp":
+                            if any(c.get("name", "").lower() == "gmail" or "gmail" in c.get("mcp_url", "").lower() for c in connectors):
+                                continue
+                            cfg = mp_c.get("config") or {}
+                            mcp_url = cfg.get("mcp_url") or os.getenv("GMAIL_MCP_SERVICE_URL") or "http://localhost:3001/mcp"
+                            svc_secret = cfg.get("service_secret") or os.getenv("ORBIT_SERVICE_SECRET")
+                            gmail_headers = []
+                            if svc_secret:
+                                gmail_headers.append({"key": "X-Orbit-Secret", "value": svc_secret})
+                            gmail_headers.append({"key": "X-User-Id", "value": target_user_id})
+
+                            try:
+                                from proactive_integrations import ProviderIntegrationStore
+                                pis = ProviderIntegrationStore()
+                                user_account = pis.get_account(target_user_id, "gmail")
+                                if user_account and user_account.get("access_token"):
+                                    gmail_headers.append({"key": "Authorization", "value": f"Bearer {user_account['access_token']}"})
+                                    if user_account.get("refresh_token"):
+                                        gmail_headers.append({"key": "X-Refresh-Token", "value": user_account["refresh_token"]})
+                                    if user_account.get("scopes"):
+                                        gmail_headers.append({"key": "X-Authorized-Scopes", "value": ",".join(user_account["scopes"])})
+                            except Exception:
+                                pass
+
+                            try:
+                                discovered_tools = await mcp_client.connect_and_list_mcp_tools(
+                                    mcp_url,
+                                    custom_headers={h["key"]: h["value"] for h in gmail_headers},
+                                    timeout=3.5,
+                                )
+                                connectors.append({
+                                    "id": "marketplace_gmail_mcp",
+                                    "name": "Gmail",
+                                    "mcp_url": mcp_url,
+                                    "is_connected": True,
+                                    "headers": gmail_headers,
+                                    "tools": discovered_tools,
+                                    "tool_permissions": {},
+                                })
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
                 used_names = set(self.tools_by_name.keys())
 
                 for conn in connectors:
