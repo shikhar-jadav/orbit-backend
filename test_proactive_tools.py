@@ -103,3 +103,83 @@ def test_dynamic_system_prompt_injects_local_iso_and_replaces_placeholder():
     assert "{current_time}" not in rendered
     assert "Local ISO-8601" in rendered
     assert "UTC ISO-8601" in rendered
+
+
+def test_manage_routine_is_single_unified_tool():
+    from tools import WORKSPACE_TOOLS, manage_routine, create_event_routine
+
+    assert manage_routine in WORKSPACE_TOOLS
+    assert create_event_routine not in WORKSPACE_TOOLS
+    assert [tool.name for tool in WORKSPACE_TOOLS].count("manage_routine") == 1
+
+
+def test_manage_routine_event_trigger_validation():
+    from unittest.mock import MagicMock
+    from proactive_engine import active_proactive_store_var
+    from memory_store import active_user_id_var
+
+    active_proactive_store_var.set(MagicMock())
+    active_user_id_var.set("user_tool_test")
+
+    # Missing action_prompt
+    res1 = manage_routine.invoke({
+        "action": "register_event",
+        "source": "github",
+        "repository": "owner/repo",
+    })
+    assert "action_prompt is required" in res1
+
+    # Missing source
+    res2 = manage_routine.invoke({
+        "action": "register_event",
+        "action_prompt": "Summarize issue",
+    })
+    assert "source must be" in res2
+
+    # GitHub missing repository
+    res3 = manage_routine.invoke({
+        "action": "register_event",
+        "action_prompt": "Summarize issue",
+        "source": "github",
+    })
+    assert "repository in 'owner/repo' format is required" in res3
+
+    # Slack missing channel
+    res4 = manage_routine.invoke({
+        "action": "register_event",
+        "action_prompt": "Alert team",
+        "source": "slack",
+    })
+    assert "channel_name is required" in res4
+
+
+def test_manage_routine_event_listing_and_delete():
+    from unittest.mock import MagicMock, patch
+    from proactive_engine import active_proactive_store_var
+    from memory_store import active_user_id_var
+
+    mock_store = MagicMock()
+    mock_store.list_routines.return_value = [
+        {
+            "id": "routine-123",
+            "name": "Test Issue Trigger",
+            "action_prompt": "Summarize issue and post in thread",
+            "trigger_type": "event",
+            "event_source": "github",
+            "event_type": "issues.opened",
+            "trigger_definition": {"when": "When a new issue is opened", "repository": "owner/repo"},
+            "enabled": True,
+        }
+    ]
+    mock_store.delete_routine.return_value = True
+
+    active_proactive_store_var.set(mock_store)
+    active_user_id_var.set("user_tool_test")
+
+    list_res = manage_routine.invoke({"action": "list"})
+    assert "Test Issue Trigger" in list_res
+    assert "Event Trigger: Github / issues.opened" in list_res
+
+    with patch("server.delete_routine_endpoint", return_value={"status": "deleted"}):
+        del_res = manage_routine.invoke({"action": "delete", "routine_id": "routine-123"})
+        assert "Successfully deleted" in del_res

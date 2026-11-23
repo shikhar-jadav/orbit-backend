@@ -388,26 +388,81 @@ def _find_routine_by_id_or_keyword(store, user_id: str, target: str):
     return matched[0] if matched else None
 
 
+def _run_coroutine_sync(coro):
+    """Safely execute an async coroutine from either sync threads or running event loops."""
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+    return asyncio.run(coro)
+
+
 @tool
 def manage_routine(
-    action: Literal["schedule", "create", "list", "pause", "resume", "delete", "test"],
+    action: Literal[
+        "register_event",
+        "create_event",
+        "schedule",
+        "create",
+        "list",
+        "pause",
+        "resume",
+        "delete",
+        "test",
+    ],
     name: Optional[str] = None,
     action_prompt: Optional[str] = None,
+    # Event-trigger options (GitHub, Slack, Gmail, or webhook triggers):
+    source: Optional[Literal["github", "slack", "gmail", "webhook"]] = None,
+    event_type: Optional[str] = None,
+    when_to_run: Optional[str] = None,
+    repository: Optional[str] = None,
+    channel_name: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    # Scheduled task options:
     run_at: Optional[str] = None,
     cron_expression: Optional[str] = None,
+    # Routine management / query options:
     routine_id: Optional[str] = None,
     filter_status: str = "all",
     require_approval_for_writes: bool = True,
     routine_type: Optional[Literal["reminder", "task"]] = None,
 ) -> str:
-    """Create or manage reminders and routines using structured schedule values.
+    """Register, schedule, list, pause, resume, test, or delete automations, reminders, and event triggers.
 
-    The model resolves the user's request; this tool does not parse natural-language time.
-    For `schedule`, provide name, action_prompt, and run_at as an ISO-8601 timestamp WITH timezone.
-    For `create`, provide name, action_prompt, and a standard five-field cron_expression evaluated in UTC.
-    For `list`, optionally set filter_status to active, paused, or all.
-    For pause, resume, delete, or test, provide routine_id (ID or title keyword); delete also accepts 'all'.
-    If the date, time, or timezone is ambiguous, ask the user before calling this tool.
+    This is the single unified tool for all proactive routines:
+    1. Register Event Triggers (action='register_event'):
+       Starts Orbit when an event occurs on GitHub, Slack, Gmail, or a custom webhook.
+       - e.g. "whenever a new issue comes summarize it and tell me":
+         manage_routine(
+             action="register_event",
+             name="Summarize New Issues",
+             action_prompt="Summarize the new GitHub issue and inform the user",
+             source="github",
+             event_type="issues.opened",
+             repository="owner/repo",
+             when_to_run="When a new issue is opened in owner/repo"
+         )
+       - Supported sources:
+         * 'github': event_type in {'issues.opened', 'issues.labeled', 'pull_request.opened', 'issue_comment.created'}. Requires repository="owner/repo".
+         * 'slack': event_type in {'message.channels', 'app_mention', 'reaction_added'}. Requires channel_name.
+         * 'gmail': event_type="email.received".
+         * 'webhook': custom event_type for external HTTP webhook triggers.
+    2. Schedule One-Time Reminders (action='schedule'):
+       Provide name, action_prompt, and run_at as an ISO-8601 timestamp WITH timezone offset.
+    3. Create Recurring Routines (action='create'):
+       Provide name, action_prompt, and a 5-field UTC cron_expression.
+    4. List Routines & Triggers (action='list'):
+       Lists all registered event triggers, scheduled tasks, and reminders with their IDs and statuses. Optionally filter_status='all'|'active'|'paused'.
+    5. Delete Routines & Triggers (action='delete'):
+       Provide routine_id (ID or title keyword), or 'all' to delete all routines. Cleans up any associated webhooks.
+    6. Pause / Resume / Test (action='pause'|'resume'|'test'):
+       Provide routine_id to toggle or trigger a test execution.
     """
     from datetime import datetime, timezone
     from memory_store import active_user_id_var
@@ -417,6 +472,115 @@ def manage_routine(
 
     user_id = active_user_id_var.get() or "default_user"
     store = _get_proactive_store()
+
+    # Intelligent action routing: if action in {"create", "schedule"} but source is provided, treat as event trigger registration
+    is_event_action = action in {"register_event", "create_event"} or (
+        action in {"create", "schedule"} and source in {"github", "slack", "gmail", "webhook"}
+    )
+
+    if is_event_action:
+        if not action_prompt or not action_prompt.strip():
+            return "Error: action_prompt is required (instructions for what Orbit should do when the event occurs)."
+        if not source or source.strip().lower() not in {"github", "slack", "gmail", "webhook"}:
+            return "Error: source must be 'github', 'slack', 'gmail', or 'webhook'."
+        src = source.strip().lower()
+        evt = (event_type or "").strip()
+        if not evt:
+            if src == "github":
+                evt = "issues.opened"
+            elif src == "gmail":
+                evt = "email.received"
+            elif src == "slack":
+                evt = "message.channels"
+            else:
+                evt = "custom_event"
+
+        routine_name = (name or "").strip()
+        if not routine_name:
+            routine_name = f"{src.title()} {evt} trigger"
+
+        when = (when_to_run or "").strip()
+        if not when:
+            if src == "github" and repository:
+                when = f"When {evt} occurs on {repository.strip()}"
+            elif src == "slack" and channel_name:
+                when = f"When {evt} occurs in #{channel_name.strip().lstrip('#')}"
+            else:
+                when = f"When {evt} event is received from {src}"
+
+        if src == "github":
+            repo = (repository or "").strip()
+            if not repo or "/" not in repo:
+                return "Error: repository in 'owner/repo' format is required to register a GitHub event trigger."
+        elif src == "slack":
+            chan = (channel_name or "").strip()
+            if not chan:
+                return "Error: channel_name is required to register a Slack event trigger."
+
+        import os
+        from urllib.parse import urlparse
+        from starlette.requests import Request
+        from fastapi import HTTPException
+        import server
+
+        base_url = os.getenv("ORBIT_PUBLIC_URL", "http://localhost:8000").rstrip("/")
+        parsed = urlparse(base_url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        req = Request({
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": parsed.scheme or "http",
+            "path": "/api/routines/events",
+            "raw_path": b"/api/routines/events",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],
+            "server": (parsed.hostname or "localhost", port),
+            "client": ("127.0.0.1", 0),
+        })
+        body = server.EventRoutineCreateRequest(
+            name=routine_name,
+            instruction=action_prompt.strip(),
+            source=src,
+            event_type=evt,
+            when_to_run=when,
+            filters=filters,
+            repository=repository.strip() if repository else None,
+            channel_name=channel_name.strip().lstrip("#") if channel_name else None,
+        )
+
+        async def _call_create_event():
+            return await server.create_event_routine_endpoint(
+                body,
+                req,
+                {"user_id": user_id},
+            )
+
+        try:
+            res = _run_coroutine_sync(_call_create_event())
+            created_routine = res["routine"]
+            lines = [
+                f"Event trigger registered: '{created_routine['name']}'",
+                f"- ID: `{created_routine['id']}`",
+                f"- Source: {src}",
+                f"- Event: `{evt}`",
+                f"- When to run: {when}",
+                f"- Action: {created_routine['action_prompt']}",
+            ]
+            if repository:
+                lines.append(f"- Repository: `{repository.strip()}`")
+            if channel_name:
+                lines.append(f"- Channel: `#{channel_name.strip().lstrip('#')}`")
+            if res.get("webhook_url"):
+                lines.append(f"- Webhook URL: `{res['webhook_url']}`")
+            lines.append("Orbit is now actively monitoring for this event.")
+            return "\n".join(lines)
+        except HTTPException as exc:
+            return f"Could not register event trigger: {exc.detail}"
+        except Exception as exc:
+            return f"Could not register event trigger: {exc}"
 
     if action in {"schedule", "create"}:
         if not name or not name.strip():
@@ -503,16 +667,30 @@ def manage_routine(
             or (clean_filter == "paused" and not routine["enabled"])
         ]
         if not filtered:
-            return "No scheduled reminders or routines found."
+            return "No scheduled reminders, routines, or event triggers found."
         lines = [f"Found {len(filtered)} scheduled reminder(s) / routine(s):"]
         for routine in filtered:
-            kind = "One-Time Reminder" if routine["one_shot"] else "Recurring Routine"
             status = "Active" if routine["enabled"] else "Paused"
-            lines.append(
-                f"- [{status}] `{routine['id']}` | '{routine['name']}' ({kind})\n"
-                f"  * Next execution: {format_display_time(routine.get('next_run_at'))}\n"
-                f"  * Prompt: {routine['action_prompt']}"
-            )
+            if routine.get("trigger_type") == "event":
+                trigger_def = routine.get("trigger_definition") or {}
+                source_label = (routine.get("event_source") or trigger_def.get("source") or "event").title()
+                event_type_label = routine.get("event_type") or trigger_def.get("event_type") or "event"
+                when_str = trigger_def.get("when") or f"{source_label} {event_type_label}"
+                target_repo = trigger_def.get("repository")
+                target_chan = trigger_def.get("channel_name")
+                extra = f" [{target_repo}]" if target_repo else (f" [#{target_chan}]" if target_chan else "")
+                lines.append(
+                    f"- [{status}] `{routine['id']}` | '{routine['name']}' (Event Trigger: {source_label} / {event_type_label}{extra})\n"
+                    f"  * Trigger: {when_str}\n"
+                    f"  * Action: {routine['action_prompt']}"
+                )
+            else:
+                kind = "One-Time Reminder" if routine["one_shot"] else "Recurring Routine"
+                lines.append(
+                    f"- [{status}] `{routine['id']}` | '{routine['name']}' ({kind})\n"
+                    f"  * Next execution: {format_display_time(routine.get('next_run_at'))}\n"
+                    f"  * Prompt: {routine['action_prompt']}"
+                )
         return "\n".join(lines)
 
     if not routine_id or not routine_id.strip():
@@ -522,7 +700,16 @@ def manage_routine(
     if action == "delete" and routine_id.strip().lower() in {
         "all", "all_routines", "*", "everything"
     }:
-        count = store.delete_all_routines(user_id=user_id)
+        all_routines = store.list_routines(user_id=user_id)
+        for r in all_routines:
+            try:
+                import server
+                async def _del_single(r_id=r["id"]):
+                    return await server.delete_routine_endpoint(r_id, {"user_id": user_id})
+                _run_coroutine_sync(_del_single())
+            except Exception:
+                store.delete_routine(r["id"])
+        count = len(all_routines)
         return f"Successfully deleted all {count} scheduled routine(s) / reminder(s)."
 
     routine = _find_routine_by_id_or_keyword(store, user_id, routine_id)
@@ -541,7 +728,13 @@ def manage_routine(
         store.update_routine(routine["id"], enabled=True, next_run_at=next_iso)
         return f"Successfully resumed routine '{routine['name']}'. Next execution: {format_display_time(next_iso)}."
     if action == "delete":
-        store.delete_routine(routine["id"])
+        try:
+            import server
+            async def _del_target():
+                return await server.delete_routine_endpoint(routine["id"], {"user_id": user_id})
+            _run_coroutine_sync(_del_target())
+        except Exception:
+            store.delete_routine(routine["id"])
         return f"Successfully deleted routine '{routine['name']}' (ID: `{routine['id']}`)."
     if action == "test":
         try:
@@ -650,7 +843,6 @@ WORKSPACE_TOOLS = [
     search_available_tools,
     manage_memory,
     manage_routine,
-    create_event_routine,
 ]
 
 # Complete suite of active agent tools sent to the model:
