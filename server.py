@@ -6,6 +6,7 @@ import base64
 import html
 import httpx
 import math
+import logging
 import mimetypes
 import queue
 import re
@@ -219,6 +220,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+_performance_logger = logging.getLogger("orbit.performance")
+
+
+@app.middleware("http")
+async def request_performance_middleware(request: Request, call_next):
+    """Expose backend request setup latency without logging query strings or user data."""
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", request.url.path)
+        _performance_logger.exception(
+            "request_failed method=%s route=%s elapsed_ms=%.1f",
+            request.method,
+            route_path,
+            elapsed_ms,
+        )
+        raise
+
+    elapsed_ms = (time.perf_counter() - started_at) * 1000
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", request.url.path)
+    response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
+    if elapsed_ms >= 300:
+        _performance_logger.warning(
+            "slow_request method=%s route=%s status=%s elapsed_ms=%.1f streaming=%s",
+            request.method,
+            route_path,
+            response.status_code,
+            elapsed_ms,
+            response.headers.get("content-type", "").startswith("text/event-stream"),
+        )
+    return response
+
+
 app.include_router(gmail_mcp_server.router)
 
 login_rate_limiter = auth.LoginRateLimiter(max_attempts=5, window_seconds=900)
