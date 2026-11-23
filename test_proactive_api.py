@@ -142,7 +142,7 @@ def test_routines_api_crud(test_client, auth_headers):
     )
     assert res_continue.status_code == 200
     continued_thread = res_continue.json()["thread"]
-    assert continued_thread["title"].startswith("Follow-up:")
+    assert continued_thread["title"] == "Hydration Reminder"
     persisted_thread = server.chat_store.get_thread(
         continued_thread["thread_id"],
         user_id=user_id,
@@ -150,6 +150,11 @@ def test_routines_api_crud(test_client, auth_headers):
     )
     assert persisted_thread is not None
     assert len(persisted_thread["messages"]) == 2
+    assert persisted_thread["messages"][0]["content"].startswith("Drink water")
+    saved_assistant = persisted_thread["messages"][1]
+    assert saved_assistant["content"]
+    assert any(part.get("type") == "context" for part in saved_assistant["parts"])
+    assert any(part.get("type") == "text" for part in saved_assistant["parts"])
 
     # 6. Notifications API
     res_notifs = test_client.get("/api/notifications", headers=headers)
