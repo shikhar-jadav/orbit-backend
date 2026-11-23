@@ -28,6 +28,15 @@ logger = logging.getLogger("orbit.gmail_mcp")
 
 router = APIRouter(tags=["Gmail MCP"])
 
+_PROVIDER_INTEGRATION_STORE: Any = None
+
+
+def configure_provider_integration_store(store: Any) -> None:
+    """Inject Orbit's initialized, encrypted provider-account store."""
+    global _PROVIDER_INTEGRATION_STORE
+    _PROVIDER_INTEGRATION_STORE = store
+
+
 MCP_SERVER_INFO = {
     "name": "orbit-gmail-mcp",
     "version": "3.0.1",
@@ -377,8 +386,7 @@ async def resolve_user_gmail_token(
         # Reuse the already-initialized, encrypted application store. Creating a
         # new ProviderIntegrationStore here is invalid (it requires the shared
         # PostgresDatabase) and silently made every stored Gmail account invisible.
-        from server import provider_integration_store
-        pis = provider_integration_store
+        pis = _PROVIDER_INTEGRATION_STORE
         if pis is None:
             logger.error("Gmail MCP requested before provider integration store initialization")
             return None, target_user_id, []
