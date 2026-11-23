@@ -36,9 +36,9 @@ GMAIL_MCP_CONNECTOR: Dict[str, Any] = {
             "label": "Shared MCP Service URL",
             "type": "text",
             "required": False,
-            "placeholder": "https://orbit-gmail-mcp.onrender.com/mcp",
-            "defaultValue": "http://localhost:3001/mcp",
-            "helpText": "URL of your deployed multi-user Gmail MCP service on Render or localhost.",
+            "placeholder": "http://127.0.0.1:8000/api/mcp/gmail",
+            "defaultValue": "http://127.0.0.1:8000/api/mcp/gmail",
+            "helpText": "URL of the co-hosted Gmail MCP service on this backend (/api/mcp/gmail) or a custom host.",
         },
         {
             "key": "service_secret",

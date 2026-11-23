@@ -900,7 +900,7 @@ class ReActAgent:
                             if any(c.get("name", "").lower() == "gmail" or "gmail" in c.get("mcp_url", "").lower() for c in connectors):
                                 continue
                             cfg = mp_c.get("config") or {}
-                            mcp_url = cfg.get("mcp_url") or os.getenv("GMAIL_MCP_SERVICE_URL") or "http://localhost:3001/mcp"
+                            mcp_url = cfg.get("mcp_url") or os.getenv("GMAIL_MCP_SERVICE_URL") or "http://127.0.0.1:8000/api/mcp/gmail"
                             svc_secret = cfg.get("service_secret") or os.getenv("ORBIT_SERVICE_SECRET")
                             gmail_headers = []
                             if svc_secret:

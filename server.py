@@ -66,6 +66,7 @@ from psycopg.rows import dict_row
 import auth
 import marketplace
 import mcp_client
+import gmail_mcp_server
 import skill_security
 from config_manager import RoundRobinProviderManager
 from embedding_manager import RoundRobinEmbeddingManager, RotatingEmbeddings
@@ -218,6 +219,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.include_router(gmail_mcp_server.router)
 
 login_rate_limiter = auth.LoginRateLimiter(max_attempts=5, window_seconds=900)
 discover_rate_limiter = auth.LoginRateLimiter(max_attempts=30, window_seconds=300)
@@ -7318,7 +7320,8 @@ async def serve_frontend(frontend_path: str):
         or normalized == "settings"
         or normalized.startswith("marketplace")
         or normalized.startswith("threads")
-        or normalized in {"chat", "threads", "settings", "providers", "health", "ag-ui", "copilotkit", "generative_ui", "a2ui"}
+        or normalized.startswith("mcp")
+        or normalized in {"chat", "threads", "settings", "providers", "health", "ag-ui", "copilotkit", "generative_ui", "a2ui", "mcp"}
     ):
         raise HTTPException(status_code=404, detail=f"API endpoint '/{normalized}' not found.")
     if not FRONTEND_DIST_DIR.exists():
@@ -7344,7 +7347,8 @@ async def serve_frontend(frontend_path: str):
         or normalized == "auth"
         or normalized.startswith("settings/")
         or normalized.startswith("marketplace")
-        or normalized in {"chat", "threads", "settings", "providers", "health", "ag-ui", "copilotkit", "generative_ui", "a2ui"}
+        or normalized.startswith("mcp")
+        or normalized in {"chat", "threads", "settings", "providers", "health", "ag-ui", "copilotkit", "generative_ui", "a2ui", "mcp"}
     ):
         raise HTTPException(status_code=404, detail=f"API endpoint '/{normalized}' not found.")
     if not Path(frontend_path).suffix:
