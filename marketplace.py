@@ -19,7 +19,8 @@ GMAIL_MCP_CONNECTOR: Dict[str, Any] = {
     ),
     "icon": "mail",
     "badge": "Google",
-    "authType": "OAuth / Bearer",
+    "authType": "OAuth 2.0",
+    "oauthProvider": "gmail",
     "website": "https://github.com/klodr/gmail-mcp",
     "capabilities": [
         "Read Emails & Threads",
@@ -174,7 +175,9 @@ def _mask_secret(value: str) -> str:
 
 
 def list_connectors_with_status(
-    chat_store: Any, user_id: Optional[str] = None
+    chat_store: Any,
+    user_id: Optional[str] = None,
+    provider_integration_store: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
     connector_settings = chat_store.get_settings_by_prefix("connector_", user_id=user_id)
     results = []
@@ -196,6 +199,31 @@ def list_connectors_with_status(
         all_required_set = all(bool(config_dict.get(k)) for k in required_keys)
         is_configured = (not required_keys) or all_required_set
 
+        # Check OAuth provider connection
+        oauth_provider = conn.get("oauthProvider")
+        connected_account = None
+        if oauth_provider and user_id and provider_integration_store:
+            try:
+                acc = provider_integration_store.get_account(user_id, oauth_provider)
+                if acc:
+                    connected_account = {
+                        "account_name": acc.get("account_name"),
+                        "email": acc.get("provider_account_id"),
+                    }
+            except Exception:
+                pass
+
+        is_authenticated = bool(connected_account) if oauth_provider else True
+        status = (
+            "active"
+            if (is_enabled and is_configured and is_authenticated)
+            else (
+                "needs_auth"
+                if (is_enabled and not is_authenticated)
+                else ("needs_config" if is_enabled else "available")
+            )
+        )
+
         # Mask password fields
         masked_config: dict[str, Any] = {}
         for f in conn.get("configFields", []):
@@ -206,13 +234,13 @@ def list_connectors_with_status(
                 else:
                     masked_config[f["key"]] = val
 
-        status = "active" if (is_enabled and is_configured) else ("needs_config" if is_enabled else "available")
-
         results.append({
             **conn,
             "type": "connector",
             "is_enabled": is_enabled,
             "is_configured": is_configured,
+            "is_authenticated": is_authenticated,
+            "connected_account": connected_account,
             "status": status,
             "config": masked_config,
         })

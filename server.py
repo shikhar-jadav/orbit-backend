@@ -3825,7 +3825,7 @@ async def start_event_integration_oauth_endpoint(
                 "client_id": config["client_id"],
                 "redirect_uri": redirect_uri,
                 "response_type": "code",
-                "scope": "openid email https://www.googleapis.com/auth/gmail.readonly",
+                "scope": "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.send",
                 "access_type": "offline",
                 "prompt": "consent",
                 "include_granted_scopes": "true",
@@ -7220,7 +7220,7 @@ async def get_marketplace_catalog(current_user: Dict[str, Any] = Depends(require
     """Retrieve full catalog of connectors and modular skills."""
     user_id = current_user["user_id"]
     skills = marketplace.list_available_skills(chat_store=chat_store, user_id=user_id)
-    connectors = marketplace.list_connectors_with_status(chat_store, user_id=user_id)
+    connectors = marketplace.list_connectors_with_status(chat_store, user_id=user_id, provider_integration_store=provider_integration_store)
     installed_skills_count = sum(1 for s in skills if s.get("is_installed"))
     active_connectors_count = sum(1 for c in connectors if c.get("is_enabled"))
 
