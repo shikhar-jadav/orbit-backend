@@ -808,15 +808,35 @@ class ReActAgent:
         active_mcp_tools: Dict[str, Dict[str, Any]] = {}
 
         # ── Inject long-term memories from store (cross-thread) ─────────
+        # The store APIs are synchronous (PostgreSQL + optional Qdrant). Run them
+        # off the ASGI event loop so one slow vector/database request cannot stall
+        # unrelated chat, connector, or history requests.
         if self.memory_store and target_user_id:
             try:
-                user_memories = self.memory_store.get_user_memories(target_user_id, limit=10)
+                context_loader = getattr(self.memory_store, "get_agent_context", None)
+                if callable(context_loader):
+                    memory_context = await asyncio.wait_for(
+                        asyncio.to_thread(context_loader, target_user_id),
+                        timeout=2.5,
+                    )
+                else:
+                    def load_memory_context():
+                        return {
+                            "memories": self.memory_store.get_user_memories(target_user_id, limit=10),
+                            "preferences": self.memory_store.get_user_preferences(target_user_id),
+                            "instructions": self.memory_store.get_user_instructions(target_user_id, limit=20),
+                        }
+                    memory_context = await asyncio.wait_for(
+                        asyncio.to_thread(load_memory_context),
+                        timeout=2.5,
+                    )
+
+                user_memories = memory_context.get("memories") or []
                 if user_memories:
                     memory_lines = []
                     for mem in user_memories:
                         val = mem.get("value", {})
                         if isinstance(val, dict):
-                            # Format each memory entry
                             for k, v in val.items():
                                 memory_lines.append(f"- {k}: {v}")
                         else:
@@ -828,27 +848,37 @@ class ReActAgent:
                         + "\n".join(memory_lines[:20])
                     )
 
-                user_prefs = self.memory_store.get_user_preferences(target_user_id)
+                user_prefs = memory_context.get("preferences") or {}
                 if user_prefs:
-                    pref_lines = [f"- {k}: {v.get('value', v) if isinstance(v, dict) else v}" for k, v in user_prefs.items()]
+                    pref_lines = [
+                        f"- {k}: {v.get('value', v) if isinstance(v, dict) else v}"
+                        for k, v in user_prefs.items()
+                    ]
                     active_prompt += (
                         "\n\n### User Preferences (Cross-Thread)\n"
                         + "\n".join(pref_lines[:15])
                     )
 
-                # ── Procedural Rules (Learned from feedback/corrections) ──
-                if hasattr(self.memory_store, "get_user_instructions"):
-                    user_rules = self.memory_store.get_user_instructions(target_user_id, limit=20)
-                    if user_rules:
-                        rule_lines = [f"- [{r.get('category', 'rule')}]: {r.get('rule')}" for r in user_rules if r.get("rule")]
-                        if rule_lines:
-                            active_prompt += (
-                                "\n\n### Learned Procedural Rules & Behavioral Instructions:\n"
-                                "You MUST strictly adhere to the following rules learned from user feedback and past corrections:\n"
-                                + "\n".join(rule_lines)
-                            )
+                user_rules = memory_context.get("instructions") or []
+                if user_rules:
+                    rule_lines = [
+                        f"- [{r.get('category', 'rule')}]: {r.get('rule')}"
+                        for r in user_rules if r.get("rule")
+                    ]
+                    if rule_lines:
+                        active_prompt += (
+                            "\n\n### Learned Procedural Rules & Behavioral Instructions:\n"
+                            "You MUST strictly adhere to the following rules learned from user feedback and past corrections:\n"
+                            + "\n".join(rule_lines)
+                        )
+            except asyncio.TimeoutError:
+                print("[agent] User memory context exceeded 2.5s; continuing without stale memory context.")
+            except Exception as e:
+                print(f"[agent] Warning loading long-term memories: {e}")
 
-                # ── Episodic Few-Shot Memory (Past problem-solving solutions) ──
+            # Episodic retrieval is best-effort. Never let an optional remote vector
+            # search hold the first token indefinitely.
+            try:
                 if hasattr(self.memory_store, "get_relevant_episodes"):
                     q_text = str(user_query) if isinstance(user_query, str) else ""
                     if not q_text and chat_history:
@@ -857,22 +887,35 @@ class ReActAgent:
                                 q_text = str(m.get("content"))
                                 break
                     if q_text:
-                        episodes = self.memory_store.get_relevant_episodes(target_user_id, query=q_text, limit=3)
+                        episodes = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                self.memory_store.get_relevant_episodes,
+                                target_user_id,
+                                query=q_text,
+                                limit=3,
+                            ),
+                            timeout=1.5,
+                        )
                         if episodes:
                             ep_lines = []
                             for ep in episodes:
                                 v = ep.get("value", {}) if isinstance(ep, dict) else getattr(ep, "value", {})
                                 if isinstance(v, dict) and v.get("task"):
                                     tools_str = f" [Tools: {', '.join(v.get('tools_used', []))}]" if v.get("tools_used") else ""
-                                    ep_lines.append(f"- Past Task: {v.get('task')}{tools_str}\n  Solution Strategy: {v.get('solution_steps', 'Resolved')}")
+                                    ep_lines.append(
+                                        f"- Past Task: {v.get('task')}{tools_str}\n"
+                                        f"  Solution Strategy: {v.get('solution_steps', 'Resolved')}"
+                                    )
                             if ep_lines:
                                 active_prompt += (
                                     "\n\n### Past Problem-Solving Episodes & Few-Shot Examples:\n"
                                     "Here is how similar tasks were successfully resolved previously. Use this context to solve the current request:\n"
                                     + "\n".join(ep_lines)
                                 )
+            except asyncio.TimeoutError:
+                print("[agent] Episodic memory search exceeded 1.5s; skipping it for this turn.")
             except Exception as e:
-                print(f"[agent] Warning loading long-term memories: {e}")
+                print(f"[agent] Episodic memory search skipped: {e}")
 
         approved_tools: set[str] = set()
         declined_tools: set[str] = set()
