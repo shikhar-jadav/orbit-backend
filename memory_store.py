@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import copy
 import json
 import logging
 import os
+import time
 from threading import Lock
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -78,6 +80,8 @@ class MemoryStoreManager:
         self._qdrant_vector = None
         self._qdrant_init_attempted = False
         self._qdrant_init_lock = Lock()
+        self._agent_context_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._agent_context_cache_lock = Lock()
 
         if database is not None:
             self._init_postgres(database, index_config)
@@ -222,7 +226,8 @@ class MemoryStoreManager:
     ) -> None:
         """Store or overwrite a memory item in PostgreSQL."""
         self.store.put(namespace, str(key), value, index=index)
-        if getattr(self, "qdrant_vector", None) and self.qdrant_vector.is_ready and value:
+        self._invalidate_agent_context_cache(namespace)
+        if getattr(self, "qdrant_vector", None) and self.qdrant_vector.supports_semantic_search and value:
             try:
                 user_id = namespace[0] if namespace else "default_user"
                 mem_type = namespace[1] if len(namespace) > 1 else "fact"
@@ -273,6 +278,7 @@ class MemoryStoreManager:
     def delete(self, namespace: Tuple[str, ...], key: str) -> None:
         """Delete a single memory item from PostgreSQL."""
         self.store.delete(namespace, str(key))
+        self._invalidate_agent_context_cache(namespace)
         if getattr(self, "qdrant_vector", None) and self.qdrant_vector.is_ready:
             try:
                 user_id = namespace[0] if namespace else "default_user"
@@ -294,13 +300,14 @@ class MemoryStoreManager:
         If a vector index is configured, semantic vector search is executed.
         If no vector index is active, performs natural keyword filtering on content.
         """
-        kwargs: Dict[str, Any] = {"limit": limit, "offset": offset}
+        candidate_limit = min(max(int(limit), 50), 200) if query else limit
+        kwargs: Dict[str, Any] = {"limit": candidate_limit, "offset": offset}
         if filter:
             kwargs["filter"] = filter
 
         # Vector search if index configured
         # 1. Semantic Vector Search via Qdrant Cloud
-        if query and getattr(self, "qdrant_vector", None) and self.qdrant_vector.is_ready:
+        if query and getattr(self, "qdrant_vector", None) and self.qdrant_vector.supports_semantic_search:
             try:
                 user_id = namespace_prefix[0] if namespace_prefix else None
                 mem_type = namespace_prefix[1] if len(namespace_prefix) > 1 else None
@@ -354,7 +361,7 @@ class MemoryStoreManager:
                 )
                 if q_lower in val_text or any(token in val_text for token in q_tokens):
                     filtered.append(item)
-            return filtered
+            return filtered[:limit]
         return results
 
     def list_namespaces(
@@ -570,6 +577,29 @@ class MemoryStoreManager:
         }
         self.put(namespace, rule_key, data)
         return rule_key
+
+    def get_agent_context(self, user_id: str, ttl_seconds: float = 30.0) -> Dict[str, Any]:
+        """Return stable user memory context with a short per-user cache."""
+        now = time.monotonic()
+        with self._agent_context_cache_lock:
+            cached = self._agent_context_cache.get(user_id)
+            if cached and now < cached[0]:
+                return copy.deepcopy(cached[1])
+
+        context = {
+            "memories": self.get_user_memories(user_id, limit=10),
+            "preferences": self.get_user_preferences(user_id),
+            "instructions": self.get_user_instructions(user_id, limit=20),
+        }
+        with self._agent_context_cache_lock:
+            self._agent_context_cache[user_id] = (time.monotonic() + ttl_seconds, context)
+        return copy.deepcopy(context)
+
+    def _invalidate_agent_context_cache(self, namespace: Tuple[str, ...]) -> None:
+        if len(namespace) < 2 or namespace[1] not in {"memories", "preferences", "instructions"}:
+            return
+        with self._agent_context_cache_lock:
+            self._agent_context_cache.pop(namespace[0], None)
 
     def get_user_instructions(
         self, user_id: str, limit: int = 50
