@@ -3827,7 +3827,7 @@ async def start_event_integration_oauth_endpoint(
                 "response_type": "code",
                 "scope": "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.send",
                 "access_type": "offline",
-                "prompt": "consent",
+                "prompt": "select_account consent",
                 "include_granted_scopes": "true",
                 "state": state,
             }
