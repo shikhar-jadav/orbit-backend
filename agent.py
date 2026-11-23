@@ -929,8 +929,8 @@ class ReActAgent:
         if chat_store is not None and target_user_id:
             try:
                 from marketplace import get_installed_skill_ids
-                installed_skills = get_installed_skill_ids(
-                    chat_store=chat_store, user_id=target_user_id
+                installed_skills = await asyncio.to_thread(
+                    get_installed_skill_ids, chat_store=chat_store, user_id=target_user_id
                 )
                 if installed_skills:
                     active_prompt += f"\n\n[Active Marketplace Skills: {', '.join(sorted(list(installed_skills))[:20])}]"
@@ -938,7 +938,7 @@ class ReActAgent:
                 pass
 
             try:
-                personal_skills = chat_store.get_personal_skills(target_user_id)
+                personal_skills = await asyncio.to_thread(chat_store.get_personal_skills, target_user_id)
                 active_skills = [
                     s for s in personal_skills if s.get("is_enabled") and not s.get("is_draft")
                 ]
@@ -968,13 +968,15 @@ class ReActAgent:
             try:
                 import mcp_client
 
-                connectors = chat_store.get_personal_connectors(
-                    target_user_id, include_secrets=True
+                connectors = await asyncio.to_thread(
+                    chat_store.get_personal_connectors, target_user_id, include_secrets=True
                 )
 
                 try:
                     import marketplace
-                    mp_connectors = marketplace.list_connectors_with_status(chat_store, user_id=target_user_id)
+                    mp_connectors = await asyncio.to_thread(
+                        marketplace.list_connectors_with_status, chat_store, user_id=target_user_id
+                    )
                     for mp_c in mp_connectors:
                         if not mp_c.get("is_enabled"):
                             continue
