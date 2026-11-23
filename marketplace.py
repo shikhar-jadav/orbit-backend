@@ -11,15 +11,14 @@ SKILLS_LOCK_PATH = BASE_DIR / "skills-lock.json"
 # ------------------------------------------------------------------------------
 GMAIL_MCP_CONNECTOR: Dict[str, Any] = {
     "id": "gmail-mcp",
-    "name": "Gmail (Shared Multi-User MCP)",
+    "name": "Gmail",
     "category": "Email & Productivity",
     "description": (
-        "Multi-user shared Gmail MCP service powered by klodr/gmail-mcp. "
-        "Allows Orbit agents to inspect threads, compose drafts, send messages, "
-        "manage labels, and search mailboxes with isolated per-user security."
+        "Connect Gmail to allow Orbit agents to search mailboxes, read email threads, "
+        "compose drafts, send messages, and manage labels with per-user OAuth security."
     ),
     "icon": "mail",
-    "badge": "Multi-User",
+    "badge": "Google",
     "authType": "OAuth / Bearer",
     "website": "https://github.com/klodr/gmail-mcp",
     "capabilities": [
