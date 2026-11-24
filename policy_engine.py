@@ -177,8 +177,8 @@ def redact_sensitive_data(value: Any, key: str = "") -> Any:
         return [redact_sensitive_data(item, key) for item in value]
     if isinstance(value, str):
         return re.sub(
-            r"(?i)(bearer\\s+)[A-Za-z0-9._~+/=-]+",
-            r"\\1[REDACTED]",
+            r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+",
+            r"\1[REDACTED]",
             value,
         )
     return value

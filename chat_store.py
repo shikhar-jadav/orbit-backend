@@ -40,8 +40,8 @@ def _redact_sensitive_payload(value: Any, key: str = "") -> Any:
         return [_redact_sensitive_payload(item, key) for item in value]
     if isinstance(value, str):
         return re.sub(
-            r"(?i)(bearer\\s+)[A-Za-z0-9._~+/=-]+",
-            r"\\1[REDACTED]",
+            r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+",
+            r"\1[REDACTED]",
             value,
         )
     return value

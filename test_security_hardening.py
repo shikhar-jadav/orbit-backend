@@ -165,7 +165,7 @@ def test_sensitive_values_are_redacted_from_approval_payloads():
         {
             "to": "customer@example.test",
             "api_token": "private-token",
-            "Authorization": "Bearer private-bearer",
+            "note": "Forward with Bearer private-bearer only when explicitly requested",
             "headers": [{"key": "X-Secret", "value": "header-secret"}],
         }
     )
