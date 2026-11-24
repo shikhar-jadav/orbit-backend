@@ -698,6 +698,7 @@ def test_slack_event_callback_verifies_signature_and_queues_matching_event(
     monkeypatch.setenv("ORBIT_PUBLIC_URL", "https://orbit.example.test")
     signing_secret = "slack-signing-secret"
     monkeypatch.setenv("SLACK_SIGNING_SECRET", signing_secret)
+    monkeypatch.setenv("SLACK_EVENTS_READY", "true")
     store.save_account(
         user_id=user_id,
         provider="slack",

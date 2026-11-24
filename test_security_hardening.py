@@ -1,4 +1,5 @@
 import json
+from uuid import uuid4
 
 import pytest
 
@@ -9,12 +10,25 @@ from policy_engine import evaluate_policy, redact_sensitive_data
 from policy_engine import parse_action_approval
 
 
+
+
+
+def _make_vault_test_user(store, prefix: str) -> str:
+    email = f"{prefix}-{uuid4().hex}@example.test"
+    user, _ = store.create_user(
+        email=email,
+        display_name="Vault Test User",
+        password_hash="test-password-hash",
+    )
+    return user["user_id"]
+
 def test_custom_connector_credentials_are_encrypted_and_masked(postgres_database, monkeypatch):
     key = CredentialVault().configured
     assert key
     store = PostgresChatStore(postgres_database)
+    user_id = _make_vault_test_user(store, "user-vault-1")
     connector = store.create_personal_connector(
-        "user-vault-1",
+        user_id,
         name="Private MCP",
         mcp_url="https://mcp.example.test",
         headers=[{"key": "Authorization", "value": "Bearer private-header-token"}],
@@ -32,13 +46,13 @@ def test_custom_connector_credentials_are_encrypted_and_masked(postgres_database
     assert "private-oauth-secret" not in stored
     assert "enc:v1:" in stored
 
-    public = store.get_personal_connector("user-vault-1", connector["id"])
+    public = store.get_personal_connector(user_id, connector["id"])
     assert public["headers"][0]["has_value"] is True
     assert "private-header-token" not in json.dumps(public)
     assert "private-oauth-secret" not in json.dumps(public)
 
     private = store.get_personal_connector(
-        "user-vault-1", connector["id"], include_secrets=True
+        user_id, connector["id"], include_secrets=True
     )
     assert private["headers"][0]["value"] == "Bearer private-header-token"
     assert private["advanced"]["oauth_client_secret"] == "private-oauth-secret"
@@ -46,8 +60,9 @@ def test_custom_connector_credentials_are_encrypted_and_masked(postgres_database
 
 def test_legacy_custom_connector_credentials_are_migrated(postgres_database):
     store = PostgresChatStore(postgres_database)
+    user_id = _make_vault_test_user(store, "user-vault-2")
     connector = store.create_personal_connector(
-        "user-vault-2",
+        user_id,
         name="Legacy MCP",
         mcp_url="https://legacy.example.test",
     )
@@ -62,7 +77,7 @@ def test_legacy_custom_connector_credentials_are_migrated(postgres_database):
                 json.dumps([{"key": "Authorization", "value": "legacy-header-secret"}]),
                 json.dumps({"oauth_client_secret": "legacy-oauth-secret"}),
                 connector["id"],
-                "user-vault-2",
+                user_id,
             ),
         )
 
@@ -79,7 +94,7 @@ def test_legacy_custom_connector_credentials_are_migrated(postgres_database):
     assert "legacy-oauth-secret" not in stored
 
     recovered = store.get_personal_connector(
-        "user-vault-2", connector["id"], include_secrets=True
+        user_id, connector["id"], include_secrets=True
     )
     assert recovered["headers"][0]["value"] == "legacy-header-secret"
     assert recovered["advanced"]["oauth_client_secret"] == "legacy-oauth-secret"
@@ -87,6 +102,7 @@ def test_legacy_custom_connector_credentials_are_migrated(postgres_database):
 
 def test_marketplace_password_fields_are_encrypted(postgres_database):
     store = PostgresChatStore(postgres_database)
+    user_id = _make_vault_test_user(store, "user-vault-3")
     connector = {
         "id": "vault-test-connector",
         "name": "Vault test connector",
@@ -102,16 +118,16 @@ def test_marketplace_password_fields_are_encrypted(postgres_database):
             "vault-test-connector",
             True,
             {"api_token": "marketplace-private-token", "workspace": "demo"},
-            user_id="user-vault-3",
+            user_id=user_id,
         )
         raw = store.get_setting(
-            "connector_vault-test-connector_config", user_id="user-vault-3"
+            "connector_vault-test-connector_config", user_id=user_id
         )
         assert "marketplace-private-token" not in raw
         assert "enc:v1:" in raw
 
         status = marketplace.list_connectors_with_status(
-            store, user_id="user-vault-3"
+            store, user_id=user_id
         )
         item = next(x for x in status if x["id"] == "vault-test-connector")
         assert item["is_configured"] is True

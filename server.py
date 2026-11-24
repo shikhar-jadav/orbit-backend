@@ -2672,7 +2672,8 @@ async def create_event_routine_endpoint(
 
     webhook_token = secrets.token_urlsafe(24) if source == "webhook" else None
     webhook_secret = secrets.token_hex(32) if source in {"webhook", "github"} else None
-    if webhook_secret and not provider_integration_store.token_storage_configured:
+    from credential_vault import CredentialVault
+    if webhook_secret and not CredentialVault().configured:
         raise HTTPException(
             status_code=503,
             detail="Configure INTEGRATION_TOKEN_ENCRYPTION_KEY before creating webhook triggers.",
