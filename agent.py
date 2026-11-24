@@ -1099,13 +1099,23 @@ class ReActAgent:
                                 })
                             except Exception as g_err:
                                 print(f"[agent] Failed to load co-hosted Gmail MCP tools: {g_err}")
+                        elif mp_c.get("id") == "github-mcp":
+                            if any(c.get("id") == "marketplace_github_mcp" or "api.githubcopilot.com/mcp" in c.get("mcp_url", "").lower() for c in connectors):
+                                continue
+                            try:
+                                from github_mcp_client import load_github_mcp_connector
+                                gh_conn = await load_github_mcp_connector(target_user_id)
+                                if gh_conn and gh_conn.get("tools"):
+                                    connectors.append(gh_conn)
+                            except Exception as gh_err:
+                                print(f"[agent] Failed to load GitHub MCP tools: {gh_err}")
                 except Exception:
                     pass
 
                 used_names = set(self.tools_by_name.keys())
 
                 for conn in connectors:
-                    if not conn.get("is_connected"):
+                    if not conn.get("is_connected") or conn.get("reconnect_required"):
                         continue
                     perms = conn.get("tool_permissions") or {}
                     for tool_def in conn.get("tools") or []:

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from credential_vault import CredentialVault
+from credential_vault import CredentialUnrecoverableError, CredentialVault
 
 BASE_DIR = Path(__file__).resolve().parent
 SKILLS_DIR = BASE_DIR / ".agents" / "skills"
@@ -35,7 +35,30 @@ GMAIL_MCP_CONNECTOR: Dict[str, Any] = {
     "configFields": [],
 }
 
-AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR]
+GITHUB_MCP_CONNECTOR: Dict[str, Any] = {
+    "id": "github-mcp",
+    "name": "GitHub",
+    "category": "Developer & Code",
+    "description": (
+        "Connect GitHub to browse repositories and code, manage issues and pull requests, "
+        "monitor GitHub Actions workflows, analyze security alerts, and power GitHub event triggers."
+    ),
+    "icon": "gitBranch",
+    "badge": "GitHub",
+    "authType": "OAuth 2.0",
+    "oauthProvider": "github",
+    "website": "https://github.com/github/github-mcp-server",
+    "capabilities": [
+        "Browse Repositories & Code",
+        "Manage Issues & Pull Requests",
+        "Monitor GitHub Actions & CI/CD",
+        "Code & Security Analysis",
+        "GitHub Event Triggers & Webhooks",
+    ],
+    "configFields": [],
+}
+
+AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR, GITHUB_MCP_CONNECTOR]
 
 
 def register_connector(connector: Dict[str, Any]) -> None:
@@ -195,11 +218,24 @@ def list_connectors_with_status(
             config_dict = {}
 
         vault = CredentialVault()
+        reconnect_required = False
+        reconnect_message: Optional[str] = None
+        integration_ctx = f"marketplace_connector:{conn_id}"
+        uid = str(user_id or "global")
         for field in conn.get("configFields", []):
             if field.get("type") == "password":
                 key = field.get("key")
                 if key and config_dict.get(key):
-                    config_dict[key] = vault.decrypt_text(str(config_dict[key]))
+                    try:
+                        config_dict[key] = vault.decrypt_text(
+                            str(config_dict[key]), user_id=uid, integration=integration_ctx
+                        )
+                    except CredentialUnrecoverableError:
+                        config_dict[key] = ""
+                        reconnect_required = True
+                        reconnect_message = (
+                            f"{conn['name']} credentials use an outdated encryption key and need to be re-entered."
+                        )
 
         # Check required fields
         required_keys = [f["key"] for f in conn.get("configFields", []) if f.get("required")]
@@ -209,21 +245,35 @@ def list_connectors_with_status(
         # Check OAuth provider connection
         oauth_provider = conn.get("oauthProvider")
         connected_account = None
+        oauth_reconnect_required = False
         if oauth_provider and user_id and provider_integration_store:
             try:
-                acc = provider_integration_store.get_account(user_id, oauth_provider)
+                acc = provider_integration_store.get_account(
+                    user_id, oauth_provider, allow_unrecoverable=True
+                )
                 if acc:
+                    oauth_reconnect_required = bool(acc.get("reconnect_required"))
                     connected_account = {
                         "account_name": acc.get("account_name"),
                         "email": acc.get("provider_account_id"),
+                        "reconnect_required": oauth_reconnect_required,
                     }
+                    if oauth_reconnect_required:
+                        reconnect_required = True
+                        reconnect_message = acc.get("reconnect_message") or (
+                            f"Your {oauth_provider.title()} account needs to be reconnected."
+                        )
             except Exception:
                 pass
 
-        is_authenticated = bool(connected_account) if oauth_provider else True
+        is_authenticated = (
+            (bool(connected_account) and not oauth_reconnect_required)
+            if oauth_provider
+            else True
+        )
         status = (
             "active"
-            if (is_enabled and is_configured and is_authenticated)
+            if (is_enabled and is_configured and is_authenticated and not reconnect_required)
             else (
                 "needs_auth"
                 if (is_enabled and not is_authenticated)
@@ -249,6 +299,8 @@ def list_connectors_with_status(
             "is_authenticated": is_authenticated,
             "connected_account": connected_account,
             "status": status,
+            "reconnect_required": reconnect_required,
+            "reconnect_message": reconnect_message,
             "config": masked_config,
         })
 
@@ -276,12 +328,19 @@ def save_connector_configuration(
         existing_config = {}
 
     vault = CredentialVault()
+    uid = str(user_id or "global")
+    integration_ctx = f"marketplace_connector:{connector_id}"
     merged_config = dict(existing_config)
     for field in target.get("configFields", []):
         if field.get("type") == "password":
             key = field.get("key")
             if key and existing_config.get(key):
-                merged_config[key] = vault.decrypt_text(str(existing_config[key]))
+                try:
+                    merged_config[key] = vault.decrypt_text(
+                        str(existing_config[key]), user_id=uid, integration=integration_ctx
+                    )
+                except CredentialUnrecoverableError:
+                    merged_config[key] = ""
 
     for k, v in config.items():
         if isinstance(v, str) and "••••" in v:
@@ -293,7 +352,9 @@ def save_connector_configuration(
         if field.get("type") == "password":
             key = field.get("key")
             if key and merged_config.get(key):
-                merged_config[key] = vault.encrypt_text(str(merged_config[key]))
+                merged_config[key] = vault.encrypt_text(
+                    str(merged_config[key]), user_id=uid, integration=integration_ctx
+                )
 
     chat_store.set_setting(config_key, json.dumps(merged_config, ensure_ascii=False), user_id=user_id)
     chat_store.set_setting(enabled_key, "1" if enabled else "0", user_id=user_id)

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional, Dict, List
 
 from database import PostgresDatabase
-from credential_vault import CredentialVault
+from credential_vault import CredentialUnrecoverableError, CredentialVault
 
 
 def _utc_now() -> str:
@@ -2347,9 +2347,35 @@ class PostgresChatStore:
             raw_headers = []
 
         vault = self.credential_vault
+        user_id = str(row.get("user_id") or "")
+        connector_id = str(row.get("id") or "")
+        integration_ctx = f"personal_connector:{connector_id}"
+        reconnect_required = row.get("credential_status") == "reconnect_required"
+
+        try:
+            advanced = json.loads(row["advanced_json"] or "{}")
+            if not isinstance(advanced, dict):
+                advanced = {}
+        except Exception:
+            advanced = {}
+
         if include_secrets:
-            headers_out = vault.decrypt_headers(raw_headers)
+            try:
+                headers_out = vault.decrypt_headers(
+                    raw_headers, user_id=user_id, integration=integration_ctx
+                )
+                advanced = vault.decrypt_secret_fields(
+                    advanced, user_id=user_id, integration=integration_ctx
+                )
+            except CredentialUnrecoverableError:
+                reconnect_required = True
+                headers_out = []
+                advanced = _mask_secret_fields(advanced, vault)
         else:
+            for item in raw_headers:
+                if isinstance(item, dict) and vault.is_legacy_ciphertext(str(item.get("value", ""))):
+                    reconnect_required = True
+                    break
             headers_out = [
                 {
                     "key": str(item.get("key", "")),
@@ -2359,19 +2385,7 @@ class PostgresChatStore:
                 for item in raw_headers
                 if isinstance(item, dict) and item.get("key")
             ]
-
-        try:
-            advanced = json.loads(row["advanced_json"] or "{}")
-            if not isinstance(advanced, dict):
-                advanced = {}
-        except Exception:
-            advanced = {}
-
-        advanced = (
-            vault.decrypt_secret_fields(advanced)
-            if include_secrets
-            else _mask_secret_fields(advanced, vault)
-        )
+            advanced = _mask_secret_fields(advanced, vault)
 
         try:
             tools = json.loads(row["tools_json"] or "[]")
@@ -2398,6 +2412,13 @@ class PostgresChatStore:
             "name": row["name"],
             "mcp_url": row["mcp_url"],
             "connector_type": row["connector_type"] or "Web",
+            "credential_status": "reconnect_required" if reconnect_required else (row.get("credential_status") or "active"),
+            "reconnect_required": reconnect_required,
+            "reconnect_message": (
+                "This connector uses an outdated encryption key and needs its credentials re-entered."
+                if reconnect_required
+                else None
+            ),
             "auth_mode": row["auth_mode"] or "none",
             "headers": headers_out,
             "advanced": advanced,
@@ -2469,8 +2490,13 @@ class PostgresChatStore:
         ]
         safe_tools = tools if isinstance(tools, list) else []
         vault = self.credential_vault
-        encrypted_headers = vault.encrypt_headers(clean_headers)
-        encrypted_advanced = vault.encrypt_secret_fields(advanced or {})
+        integration_ctx = f"personal_connector:{connector_id}"
+        encrypted_headers = vault.encrypt_headers(
+            clean_headers, user_id=user_id, integration=integration_ctx
+        )
+        encrypted_advanced = vault.encrypt_secret_fields(
+            advanced or {}, user_id=user_id, integration=integration_ctx
+        )
         perms = dict(tool_permissions or {})
         for t in safe_tools:
             tname = t.get("name") if isinstance(t, dict) else None
@@ -2484,8 +2510,10 @@ class PostgresChatStore:
                 INSERT INTO user_personal_connectors (
                     id, user_id, name, mcp_url, connector_type, auth_mode,
                     headers_json, advanced_json, tools_json, tool_permissions_json,
-                    is_connected, last_status_code, last_checked_at, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    is_connected, last_status_code, last_checked_at,
+                    encryption_version, encryption_key_version, credential_status,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     connector_id,
@@ -2501,6 +2529,9 @@ class PostgresChatStore:
                     1 if is_connected else 0,
                     last_status_code,
                     now if last_status_code is not None else None,
+                    "v2",
+                    vault.key_version,
+                    "active",
                     now,
                     now,
                 ),
@@ -2556,7 +2587,7 @@ class PostgresChatStore:
                     v = existing_by_key[k.lower()]
                 merged_headers.append({"key": k, "value": v})
             updates.append("headers_json = %s")
-            params.append(json.dumps(self.credential_vault.encrypt_headers(merged_headers), ensure_ascii=False))
+            params.append(json.dumps(self.credential_vault.encrypt_headers(merged_headers, user_id=user_id, integration=f"personal_connector:{connector_id}"), ensure_ascii=False))
         if advanced is not None:
             merged_adv = dict(existing.get("advanced", {}))
             for k, v in advanced.items():
@@ -2564,7 +2595,9 @@ class PostgresChatStore:
                     continue
                 merged_adv[k] = v
             updates.append("advanced_json = %s")
-            params.append(json.dumps(self.credential_vault.encrypt_secret_fields(merged_adv), ensure_ascii=False))
+            params.append(json.dumps(self.credential_vault.encrypt_secret_fields(merged_adv, user_id=user_id, integration=f"personal_connector:{connector_id}"), ensure_ascii=False))
+            updates.extend(["encryption_version = %s", "encryption_key_version = %s", "credential_status = %s"])
+            params.extend(["v2", self.credential_vault.key_version, "active"])
         if tools is not None:
             updates.append("tools_json = %s")
             params.append(json.dumps(tools, ensure_ascii=False))
@@ -2616,31 +2649,67 @@ class PostgresChatStore:
         vault = self.credential_vault
         if not vault.configured:
             raise RuntimeError(
-                "Credential migration requires ORBIT_CREDENTIAL_ENCRYPTION_KEY "
-                "or INTEGRATION_TOKEN_ENCRYPTION_KEY."
+                "Credential migration requires INTEGRATION_ENCRYPTION_KEY."
             )
 
         personal_count = 0
         marketplace_count = 0
+        unrecoverable_skipped = 0
         with self._connection() as connection:
             personal_rows = connection.execute(
-                "SELECT id, user_id, headers_json, advanced_json FROM user_personal_connectors"
+                "SELECT id, user_id, headers_json, advanced_json, credential_status FROM user_personal_connectors"
             ).fetchall()
             for row in personal_rows:
                 headers = json.loads(row["headers_json"] or "[]")
                 advanced = json.loads(row["advanced_json"] or "{}")
-                encrypted_headers = vault.encrypt_headers(headers)
-                encrypted_advanced = vault.encrypt_secret_fields(advanced)
+                has_legacy_cipher = any(
+                    isinstance(h, dict) and vault.is_legacy_ciphertext(str(h.get("value", "")))
+                    for h in (headers if isinstance(headers, list) else [])
+                )
+                if not has_legacy_cipher:
+                    try:
+                        vault.decrypt_secret_fields(
+                            advanced,
+                            user_id=str(row["user_id"]),
+                            integration=f"personal_connector:{row['id']}",
+                        )
+                    except CredentialUnrecoverableError:
+                        has_legacy_cipher = True
+                if has_legacy_cipher:
+                    if row.get("credential_status") != "reconnect_required":
+                        connection.execute(
+                            """
+                            UPDATE user_personal_connectors
+                            SET credential_status = 'reconnect_required',
+                                encryption_version = 'legacy-unrecoverable',
+                                encryption_key_version = NULL
+                            WHERE id = %s AND user_id = %s
+                            """,
+                            (row["id"], row["user_id"]),
+                        )
+                    unrecoverable_skipped += 1
+                    continue
+
+                integration_ctx = f"personal_connector:{row['id']}"
+                encrypted_headers = vault.encrypt_headers(
+                    headers, user_id=str(row["user_id"]), integration=integration_ctx
+                )
+                encrypted_advanced = vault.encrypt_secret_fields(
+                    advanced, user_id=str(row["user_id"]), integration=integration_ctx
+                )
                 if encrypted_headers != headers or encrypted_advanced != advanced:
                     connection.execute(
                         """
                         UPDATE user_personal_connectors
-                        SET headers_json = %s, advanced_json = %s, updated_at = %s
+                        SET headers_json = %s, advanced_json = %s,
+                            encryption_version = 'v2', encryption_key_version = %s,
+                            credential_status = 'active', updated_at = %s
                         WHERE id = %s AND user_id = %s
                         """,
                         (
                             json.dumps(encrypted_headers, ensure_ascii=False),
                             json.dumps(encrypted_advanced, ensure_ascii=False),
+                            vault.key_version,
                             _utc_now(),
                             row["id"],
                             row["user_id"],
@@ -2674,7 +2743,15 @@ class PostgresChatStore:
                     key = field.get("key")
                     value = config.get(key) if key else None
                     if value:
-                        encrypted = vault.encrypt_text(str(value))
+                        str_val = str(value)
+                        if vault.is_legacy_ciphertext(str_val):
+                            unrecoverable_skipped += 1
+                            continue
+                        encrypted = vault.encrypt_text(
+                            str_val,
+                            user_id=str(row["user_id"]),
+                            integration=f"marketplace_connector:{connector_id}",
+                        )
                         if encrypted != value:
                             config[key] = encrypted
                             changed = True
@@ -2695,6 +2772,7 @@ class PostgresChatStore:
         return {
             "personal_connectors_migrated": personal_count,
             "marketplace_connectors_migrated": marketplace_count,
+            "unrecoverable_skipped": unrecoverable_skipped,
         }
 
     # --------------------------------------------------------------------------

@@ -3,7 +3,7 @@ import hmac
 import base64
 import time
 
-from cryptography.fernet import Fernet
+from credential_vault import generate_encryption_key
 
 from proactive_integrations import (
     ProviderIntegrationStore,
@@ -16,7 +16,7 @@ from proactive_integrations import (
 
 
 def test_provider_account_secrets_are_not_returned_by_public_listing(postgres_database):
-    key = Fernet.generate_key().decode("ascii")
+    key = generate_encryption_key()
     store = ProviderIntegrationStore(postgres_database, encryption_key=key)
     store.save_account(
         user_id="user-1",
@@ -48,13 +48,13 @@ def test_provider_account_storage_requires_a_key(postgres_database):
             access_token="gho_private",
         )
     except RuntimeError as exc:
-        assert "INTEGRATION_TOKEN_ENCRYPTION_KEY" in str(exc)
+        assert "INTEGRATION_ENCRYPTION_KEY" in str(exc)
     else:
         raise AssertionError("Provider token was accepted without encryption configured.")
 
 
 def test_provider_tokens_and_webhook_secrets_are_encrypted_at_rest(postgres_database):
-    key = Fernet.generate_key().decode("ascii")
+    key = generate_encryption_key()
     store = ProviderIntegrationStore(postgres_database, encryption_key=key)
     access_token = "provider-access-sentinel"
     webhook_secret = "github-webhook-sentinel"
@@ -94,7 +94,7 @@ def test_provider_store_rejects_an_invalid_encryption_key(postgres_database):
     except (ValueError, TypeError):
         pass
     else:
-        raise AssertionError("Invalid Fernet key was accepted.")
+        raise AssertionError("Invalid encryption key was accepted.")
 
 
 def test_github_signature_verifies_raw_body():
@@ -162,7 +162,7 @@ def test_slack_event_normalization_maps_channel_and_mention():
 def test_gmail_watch_cursor_is_monotonic_and_expiration_can_be_renewed(postgres_database):
     store = ProviderIntegrationStore(
         postgres_database,
-        encryption_key=Fernet.generate_key().decode("ascii"),
+        encryption_key=generate_encryption_key(),
     )
     store.save_gmail_watch_state(
         user_id="user-1",

@@ -441,7 +441,11 @@ async def resolve_user_gmail_token(
 
         return access_token, target_user_id, scopes
     except Exception as exc:
-        logger.exception("Error resolving Gmail credentials for user %s: %s", target_user_id, exc)
+        from credential_vault import CredentialReconnectRequiredError
+        if isinstance(exc, CredentialReconnectRequiredError):
+            logger.warning("Gmail credentials for user %s require reconnection: %s", target_user_id, exc)
+        else:
+            logger.exception("Error resolving Gmail credentials for user %s: %s", target_user_id, exc)
         return None, target_user_id, []
 
 # ------------------------------------------------------------------------------

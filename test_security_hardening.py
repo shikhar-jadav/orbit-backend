@@ -140,8 +140,7 @@ def test_marketplace_password_fields_are_encrypted(postgres_database):
 
 
 def test_credential_vault_fails_closed_without_a_key(monkeypatch):
-    monkeypatch.delenv("ORBIT_CREDENTIAL_ENCRYPTION_KEY", raising=False)
-    monkeypatch.delenv("INTEGRATION_TOKEN_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("INTEGRATION_ENCRYPTION_KEY", raising=False)
     vault = CredentialVault()
     with pytest.raises(RuntimeError, match="(?i)encryption[_ ]key"):
         vault.encrypt_text("new-secret")
@@ -256,10 +255,10 @@ def test_pending_approvals_are_interrupted_after_server_restart(postgres_databas
     ) is None
 
 def test_github_webhook_callback_tokens_are_hashed_and_not_listed(postgres_database):
-    from cryptography.fernet import Fernet
+    from credential_vault import generate_encryption_key
     from proactive_integrations import ProviderIntegrationStore
 
-    key = Fernet.generate_key().decode("ascii")
+    key = generate_encryption_key()
     store = ProviderIntegrationStore(postgres_database, encryption_key=key)
     callback_token = "private-github-callback-token"
     signing_secret = "private-github-signing-secret"
@@ -290,11 +289,11 @@ def test_github_webhook_callback_tokens_are_hashed_and_not_listed(postgres_datab
 
 
 def test_legacy_github_callback_tokens_are_hashed(postgres_database):
-    from cryptography.fernet import Fernet
+    from credential_vault import generate_encryption_key
     from proactive_integrations import ProviderIntegrationStore
 
     store = ProviderIntegrationStore(
-        postgres_database, encryption_key=Fernet.generate_key().decode("ascii")
+        postgres_database, encryption_key=generate_encryption_key()
     )
     store.create_github_hook(
         token="temporary-callback-token",
