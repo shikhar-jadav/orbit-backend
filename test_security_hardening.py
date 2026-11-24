@@ -127,9 +127,9 @@ def test_credential_vault_fails_closed_without_a_key(monkeypatch):
     monkeypatch.delenv("ORBIT_CREDENTIAL_ENCRYPTION_KEY", raising=False)
     monkeypatch.delenv("INTEGRATION_TOKEN_ENCRYPTION_KEY", raising=False)
     vault = CredentialVault()
-    with pytest.raises(RuntimeError, match="encryption key"):
+    with pytest.raises(RuntimeError, match="(?i)encryption[_ ]key"):
         vault.encrypt_text("new-secret")
-    with pytest.raises(RuntimeError, match="encryption key"):
+    with pytest.raises(RuntimeError, match="(?i)encryption[_ ]key"):
         vault.decrypt_text("legacy-plaintext-secret")
 
 
