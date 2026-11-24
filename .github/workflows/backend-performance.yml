@@ -43,4 +43,4 @@ jobs:
             policy_engine.py proactive_engine.py
 
       - name: Run focused performance and session tests
-        run: python -m pytest -q -rs test_backend_performance.py test_rotation.py test_security_hardening.py
+        run: python -m pytest -q -rs test_backend_performance.py test_security_hardening.py

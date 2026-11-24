@@ -184,6 +184,52 @@ def redact_sensitive_data(value: Any, key: str = "") -> Any:
     return value
 
 
+
+def parse_action_approval(
+    user_decision: Dict[str, Any], risk_level: str
+) -> tuple[bool, bool]:
+    """Return (approved, always_allow); ambiguous answers fail closed."""
+    action = str(user_decision.get("action") or "").strip().lower()
+    titles = [
+        str(item).strip().lower()
+        for item in (user_decision.get("selected_titles") or [])
+    ]
+    decline_words = ("decline", "reject", "block", "deny", "cancel", "skip")
+    is_decline = action in {"decline", "reject", "block", "deny", "cancel", "skip"}
+    is_decline = is_decline or any(
+        any(word in title for word in decline_words) for title in titles
+    )
+    approved_actions = {"approve", "allow", "yes", "proceed", "once", "continue"}
+    approved_titles = {
+        "allow once (recommended)",
+        "approve once (recommended)",
+        "approve action (recommended)",
+        "approve action (proceed with execution)",
+        "allow execution (recommended)",
+        "approve for this session",
+        "allow all script runs in this session",
+    }
+    is_approve = not is_decline and (
+        action in approved_actions
+        or any(
+            title in approved_titles
+            or title.startswith("allow once")
+            or title.startswith("approve action")
+            or title.startswith("approve once")
+            or title.startswith("allow execution")
+            or title.startswith("always allow")
+            for title in titles
+        )
+    )
+    if is_decline or not is_approve:
+        return False, False
+    always_allow = risk_level != "critical" and (
+        bool(user_decision.get("always_allow"))
+        or any("always allow" in title or "auto-approve" in title for title in titles)
+    )
+    return True, always_allow
+
+
 def evaluate_policy(
     tool_name: str,
     tool_args: Any,

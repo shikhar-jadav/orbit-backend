@@ -6,7 +6,7 @@ import marketplace
 from chat_store import PostgresChatStore
 from credential_vault import CredentialVault
 from policy_engine import evaluate_policy, redact_sensitive_data
-from agent import _parse_action_approval
+from policy_engine import parse_action_approval
 
 
 def test_custom_connector_credentials_are_encrypted_and_masked(postgres_database, monkeypatch):
@@ -177,12 +177,12 @@ def test_sensitive_values_are_redacted_from_approval_payloads():
 
 
 def test_approval_parser_fails_closed_and_never_remembers_critical_actions():
-    assert _parse_action_approval({"action": "answer", "selected_titles": []}, "high") == (False, False)
-    assert _parse_action_approval({"action": "decline"}, "high") == (False, False)
-    assert _parse_action_approval(
+    assert parse_action_approval({"action": "answer", "selected_titles": []}, "high") == (False, False)
+    assert parse_action_approval({"action": "decline"}, "high") == (False, False)
+    assert parse_action_approval(
         {"action": "approve", "always_allow": True}, "critical"
     ) == (True, False)
-    assert _parse_action_approval(
+    assert parse_action_approval(
         {"action": "approve", "always_allow": True}, "high"
     ) == (True, True)
 
