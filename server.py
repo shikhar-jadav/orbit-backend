@@ -4562,7 +4562,7 @@ async def stream_notifications_endpoint(
 @app.get("/settings/personal-skills")
 @app.get("/api/settings/personal-skills")
 async def list_personal_skills(current_user: Dict[str, Any] = Depends(require_user)):
-    return chat_store.get_personal_skills(current_user["user_id"])
+    return await asyncio.to_thread(chat_store.get_personal_skills, current_user["user_id"])
 
 
 @app.post("/settings/personal-skills")
@@ -4751,7 +4751,9 @@ async def check_personal_connector_endpoint(
 @app.get("/settings/personal-connectors")
 @app.get("/api/settings/personal-connectors")
 async def list_personal_connectors(current_user: Dict[str, Any] = Depends(require_user)):
-    return chat_store.get_personal_connectors(current_user["user_id"], include_secrets=False)
+    return await asyncio.to_thread(
+        chat_store.get_personal_connectors, current_user["user_id"], include_secrets=False
+    )
 
 
 @app.post("/settings/personal-connectors")
@@ -7475,9 +7477,31 @@ class ConnectorToggleRequest(BaseModel):
 async def get_marketplace_catalog(current_user: Dict[str, Any] = Depends(require_user)):
     """Retrieve full catalog of connectors and modular skills."""
     user_id = current_user["user_id"]
-    skills = marketplace.list_available_skills(chat_store=chat_store, user_id=user_id)
+    installed_task = asyncio.to_thread(
+        marketplace.get_installed_skill_ids, chat_store=chat_store, user_id=user_id
+    )
+    settings_task = asyncio.to_thread(
+        chat_store.get_settings_by_prefix, "connector_", user_id=user_id
+    )
+    accounts_task = (
+        asyncio.to_thread(provider_integration_store.public_accounts, user_id)
+        if provider_integration_store is not None
+        else asyncio.sleep(0, result=[])
+    )
+    installed_ids, connector_settings, public_accounts_list = await asyncio.gather(
+        installed_task, settings_task, accounts_task
+    )
+    skills = marketplace.list_available_skills(
+        chat_store=chat_store, user_id=user_id, installed_ids=installed_ids
+    )
     try:
-        connectors = marketplace.list_connectors_with_status(chat_store, user_id=user_id, provider_integration_store=provider_integration_store)
+        connectors = marketplace.list_connectors_with_status(
+            chat_store,
+            user_id=user_id,
+            provider_integration_store=provider_integration_store,
+            connector_settings=connector_settings,
+            public_accounts_list=public_accounts_list,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     installed_skills_count = sum(1 for s in skills if s.get("is_installed"))

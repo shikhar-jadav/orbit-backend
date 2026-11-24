@@ -170,9 +170,12 @@ def list_available_skills(
     force_refresh: bool = False,
     chat_store: Any = None,
     user_id: Optional[str] = None,
+    *,
+    installed_ids: Optional[set[str]] = None,
 ) -> List[Dict[str, Any]]:
     """List available skills in the marketplace (starts empty)."""
-    installed_ids = get_installed_skill_ids(chat_store=chat_store, user_id=user_id)
+    if installed_ids is None:
+        installed_ids = get_installed_skill_ids(chat_store=chat_store, user_id=user_id)
     return [{**s, "is_installed": s["id"] in installed_ids} for s in CUSTOM_SKILLS]
 
 
@@ -201,8 +204,24 @@ def list_connectors_with_status(
     chat_store: Any,
     user_id: Optional[str] = None,
     provider_integration_store: Optional[Any] = None,
+    *,
+    connector_settings: Optional[Dict[str, str]] = None,
+    public_accounts_list: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    connector_settings = chat_store.get_settings_by_prefix("connector_", user_id=user_id)
+    if connector_settings is None:
+        connector_settings = chat_store.get_settings_by_prefix("connector_", user_id=user_id)
+    accounts_by_provider: Dict[str, Dict[str, Any]] = {}
+    if user_id and provider_integration_store:
+        if public_accounts_list is None and hasattr(provider_integration_store, "public_accounts"):
+            try:
+                public_accounts_list = provider_integration_store.public_accounts(user_id)
+            except Exception:
+                public_accounts_list = None
+        if isinstance(public_accounts_list, list):
+            for acc in public_accounts_list:
+                prov = str(acc.get("provider") or "")
+                if prov and prov not in accounts_by_provider:
+                    accounts_by_provider[prov] = acc
     results = []
 
     for conn in AVAILABLE_CONNECTORS:
@@ -248,9 +267,11 @@ def list_connectors_with_status(
         oauth_reconnect_required = False
         if oauth_provider and user_id and provider_integration_store:
             try:
-                acc = provider_integration_store.get_account(
-                    user_id, oauth_provider, allow_unrecoverable=True
-                )
+                acc = accounts_by_provider.get(oauth_provider)
+                if acc is None and public_accounts_list is None:
+                    acc = provider_integration_store.get_account(
+                        user_id, oauth_provider, allow_unrecoverable=True
+                    )
                 if acc:
                     oauth_reconnect_required = bool(acc.get("reconnect_required"))
                     connected_account = {
