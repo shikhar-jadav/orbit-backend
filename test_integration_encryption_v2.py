@@ -522,7 +522,7 @@ async def test_github_mcp_connector_discovery_and_catalog():
     github_mcp_client.configure_provider_integration_store(store)
     github_mcp_client.clear_github_tools_cache()
     sample_tools = [{"name": "get_file_contents", "description": "Read repo file", "inputSchema": {"type": "object"}}]
-    with patch("mcp_client.connect_and_list_mcp_tools", new=AsyncMock(return_value=sample_tools)) as mock_list:
+    with patch("mcp_client.connect_and_list_mcp_tools", new=AsyncMock(return_value={"ok": True, "status_code": 200, "tools": sample_tools})) as mock_list:
         loaded = await github_mcp_client.load_github_mcp_connector("user-gh-mcp")
 
     assert loaded is not None

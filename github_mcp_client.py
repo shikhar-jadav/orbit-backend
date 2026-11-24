@@ -73,10 +73,19 @@ async def load_github_mcp_connector(user_id: Optional[str]) -> Optional[Dict[str
         import mcp_client
 
         headers = {"Authorization": f"Bearer {access_token}"}
-        tools = await mcp_client.connect_and_list_mcp_tools(
+        result = await mcp_client.connect_and_list_mcp_tools(
             mcp_url, custom_headers=headers
         )
-        _GITHUB_TOOLS_CACHE[cache_key] = (tools, now + _TOOLS_CACHE_TTL_SECONDS)
+        if not isinstance(result, dict) or not result.get("ok"):
+            logger.warning(
+                "GitHub MCP tool discovery failed for user %s: %s",
+                user_id,
+                result.get("error") if isinstance(result, dict) else result,
+            )
+            return None
+        tools = [t for t in (result.get("tools") or []) if isinstance(t, dict) and t.get("name")]
+        if tools:
+            _GITHUB_TOOLS_CACHE[cache_key] = (tools, now + _TOOLS_CACHE_TTL_SECONDS)
 
     return {
         "id": "marketplace_github_mcp",
