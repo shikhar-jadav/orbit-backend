@@ -86,6 +86,10 @@ from proactive_engine import (
     active_proactive_store_var,
     TriggerCompiler,
 )
+from credential_vault import (
+    CredentialReconnectRequiredError,
+    CredentialVaultNotConfiguredError,
+)
 from proactive_integrations import (
     ProviderIntegrationStore,
     create_github_webhook,
@@ -192,6 +196,16 @@ app = FastAPI(
     description="Chat workspace for the LangGraph ReAct agent with PostgreSQL memory and token streaming.",
     version="3.0.0",
 )
+
+
+@app.exception_handler(CredentialReconnectRequiredError)
+async def _credential_reconnect_exception_handler(_request: Request, exc: CredentialReconnectRequiredError):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(CredentialVaultNotConfiguredError)
+async def _credential_vault_exception_handler(_request: Request, exc: CredentialVaultNotConfiguredError):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 # Enable CORS (explicit origins required alongside allow_credentials=True)
 _default_origins = [
@@ -366,13 +380,11 @@ def _initialize_application_state() -> None:
             checkpointer=checkpointer,
         )
         proactive_store = ProactiveStore(database)
-        provider_integration_store = ProviderIntegrationStore(
-            database,
-            encryption_key=(
-                os.getenv("INTEGRATION_TOKEN_ENCRYPTION_KEY")
-                or os.getenv("ORBIT_CREDENTIAL_ENCRYPTION_KEY")
-            ),
-        )
+        try:
+            provider_integration_store = ProviderIntegrationStore(database)
+        except CredentialVaultNotConfiguredError as key_err:
+            print(f"[SECURITY] Invalid INTEGRATION_ENCRYPTION_KEY; failing closed: {key_err}", flush=True)
+            provider_integration_store = ProviderIntegrationStore(database, encryption_key="")
         gmail_mcp_server.configure_provider_integration_store(provider_integration_store)
         try:
             interrupted_approvals = chat_store.interrupt_pending_approvals()
@@ -383,6 +395,15 @@ def _initialize_application_state() -> None:
                 )
         except Exception as approval_recovery_error:
             print(f"[SECURITY] Could not reconcile pending approvals: {approval_recovery_error}", flush=True)
+        try:
+            reconciled = provider_integration_store.reconcile_legacy_credentials()
+            if (
+                reconciled.get("accounts_marked_reconnect_required")
+                or reconciled.get("hooks_marked_reconnect_required")
+            ):
+                print(f"[SECURITY] Reconciled unrecoverable integration credentials: {reconciled}", flush=True)
+        except Exception as reconcile_error:
+            print(f"[SECURITY] Integration credential reconciliation incomplete: {reconcile_error}", flush=True)
         try:
             migrated = chat_store.migrate_legacy_connector_credentials()
             print(f"[SECURITY] Credential migration complete: {migrated}", flush=True)
@@ -2676,7 +2697,7 @@ async def create_event_routine_endpoint(
     if webhook_secret and not CredentialVault().configured:
         raise HTTPException(
             status_code=503,
-            detail="Configure INTEGRATION_TOKEN_ENCRYPTION_KEY before creating webhook triggers.",
+            detail="Configure INTEGRATION_ENCRYPTION_KEY before creating webhook triggers.",
         )
     if source == "github":
         repository_condition = {
@@ -3896,7 +3917,7 @@ async def start_event_integration_oauth_endpoint(
     if not provider_integration_store.token_storage_configured:
         raise HTTPException(
             status_code=503,
-            detail="Set INTEGRATION_TOKEN_ENCRYPTION_KEY before connecting provider accounts.",
+            detail="Set INTEGRATION_ENCRYPTION_KEY before connecting provider accounts.",
         )
     redirect_uri = _event_oauth_redirect_uri(provider)
     print(f'[OAUTH] Provider {provider} redirect_uri: {redirect_uri}', flush=True)

@@ -1,6 +1,6 @@
 import pytest
 import server
-from cryptography.fernet import Fernet
+from credential_vault import generate_encryption_key
 from fastapi.testclient import TestClient
 from chat_store import PostgresChatStore
 from proactive_engine import ProactiveEngine, ProactiveStore
@@ -14,7 +14,7 @@ def configure_provider_store(monkeypatch, tmp_path):
     monkeypatch.setenv("ORBIT_PROVIDER_WEBHOOK_MAX_BYTES", "1048576")
     store = ProviderIntegrationStore(
         server.database,
-        encryption_key=Fernet.generate_key().decode("ascii"),
+        encryption_key=generate_encryption_key(),
     )
     monkeypatch.setattr(server, "provider_integration_store", store)
     return store
@@ -795,7 +795,7 @@ def test_gmail_watch_renewal_keeps_history_cursor(monkeypatch, tmp_path):
 
     store = ProviderIntegrationStore(
         server.database,
-        encryption_key=Fernet.generate_key().decode("ascii"),
+        encryption_key=generate_encryption_key(),
     )
     monkeypatch.setattr(server, "provider_integration_store", store)
     account = store.save_account(
@@ -1031,7 +1031,7 @@ def test_custom_webhook_credentials_are_protected_at_rest(test_client, auth_head
     assert row["webhook_token"] != webhook_token
     assert webhook_token not in row["webhook_token"]
     assert webhook_secret not in row["webhook_secret"]
-    assert row["webhook_secret"].startswith("enc:v1:")
+    assert row["webhook_secret"].startswith("enc:v2:")
 
     found = server.proactive_store.get_routine_by_webhook(webhook_token)
     assert found is not None

@@ -26,7 +26,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from psycopg.errors import UniqueViolation
 from database import PostgresDatabase
-from credential_vault import CredentialVault
+from credential_vault import CredentialUnrecoverableError, CredentialVault
 
 import croniter
 from dateutil import parser as dt_parser
@@ -620,8 +620,11 @@ class ProactiveStore:
             hashlib.sha256(webhook_token.encode("utf-8")).hexdigest()
             if webhook_token else None
         )
+        vault = CredentialVault()
         stored_webhook_secret = (
-            CredentialVault().encrypt_text(webhook_secret)
+            vault.encrypt_text(
+                webhook_secret, user_id=user_id, integration=f"webhook:{routine_id}"
+            )
             if webhook_secret else None
         )
         with self._lock, self._connection() as conn:
@@ -632,8 +635,9 @@ class ProactiveStore:
                     schedule_expression, schedule_timezone, schedule_interval_seconds,
                     schedule_display, one_shot, next_run_at,
                     enabled, target_thread_id, webhook_token, webhook_secret,
+                    encryption_version, encryption_key_version, credential_status,
                     require_approval, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     routine_id,
@@ -651,6 +655,9 @@ class ProactiveStore:
                     target_thread_id,
                     stored_webhook_token,
                     stored_webhook_secret,
+                    "v2" if stored_webhook_secret else None,
+                    vault.key_version if stored_webhook_secret else None,
+                    "active",
                     1 if require_approval else 0,
                     now,
                     now,
@@ -750,27 +757,44 @@ class ProactiveStore:
                 return None
             res = dict(row)
             if res.get("webhook_secret"):
-                res["webhook_secret"] = CredentialVault().decrypt_text(
-                    str(res["webhook_secret"])
-                )
+                try:
+                    res["webhook_secret"] = CredentialVault().decrypt_text(
+                        str(res["webhook_secret"]),
+                        user_id=str(res.get("user_id") or "global"),
+                        integration=f"webhook:{res['id']}",
+                    )
+                except CredentialUnrecoverableError:
+                    with self._lock, self._connection() as uconn:
+                        uconn.execute(
+                            """
+                            UPDATE proactive_routines
+                            SET credential_status = 'reconnect_required',
+                                encryption_version = 'legacy-unrecoverable',
+                                encryption_key_version = NULL
+                            WHERE id = %s
+                            """,
+                            (res["id"],),
+                        )
+                    raise
             res["one_shot"] = bool(res["one_shot"])
             res["enabled"] = bool(res["enabled"])
             res["require_approval"] = bool(res["require_approval"])
             return res
 
     def migrate_webhook_credentials(self) -> dict[str, int]:
-        """Hash stored webhook bearer tokens and encrypt signing secrets."""
+        """Hash stored webhook bearer tokens and encrypt legacy plaintext signing secrets."""
         vault = CredentialVault()
         if not vault.configured:
             raise RuntimeError(
-                "Webhook credential migration requires the shared credential encryption key."
+                "Webhook credential migration requires INTEGRATION_ENCRYPTION_KEY."
             )
         migrated_tokens = 0
         migrated_secrets = 0
+        unrecoverable_skipped = 0
         with self._lock, self._connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, webhook_token, webhook_secret
+                SELECT id, user_id, webhook_token, webhook_secret, credential_status
                 FROM proactive_routines
                 WHERE webhook_token IS NOT NULL OR webhook_secret IS NOT NULL
                 """
@@ -784,10 +808,35 @@ class ProactiveStore:
                     updates.append("webhook_token = %s")
                     values.append(hashlib.sha256(str(token).encode("utf-8")).hexdigest())
                     migrated_tokens += 1
-                if secret and not str(secret).startswith("enc:v1:"):
-                    updates.append("webhook_secret = %s")
-                    values.append(vault.encrypt_text(str(secret)))
-                    migrated_secrets += 1
+                if secret:
+                    secret_str = str(secret)
+                    if vault.is_legacy_ciphertext(secret_str):
+                        if row.get("credential_status") != "reconnect_required":
+                            updates.extend([
+                                "credential_status = %s",
+                                "encryption_version = %s",
+                                "encryption_key_version = NULL",
+                            ])
+                            values.extend(["reconnect_required", "legacy-unrecoverable"])
+                        unrecoverable_skipped += 1
+                    elif not vault.is_encrypted_v2(secret_str):
+                        updates.extend([
+                            "webhook_secret = %s",
+                            "encryption_version = %s",
+                            "encryption_key_version = %s",
+                            "credential_status = %s",
+                        ])
+                        values.extend([
+                            vault.encrypt_text(
+                                secret_str,
+                                user_id=str(row.get("user_id") or "global"),
+                                integration=f"webhook:{row['id']}",
+                            ),
+                            "v2",
+                            vault.key_version,
+                            "active",
+                        ])
+                        migrated_secrets += 1
                 if updates:
                     conn.execute(
                         f"UPDATE proactive_routines SET {', '.join(updates)}, updated_at = %s WHERE id = %s",
@@ -796,6 +845,7 @@ class ProactiveStore:
         return {
             "webhook_tokens_hashed": migrated_tokens,
             "webhook_secrets_encrypted": migrated_secrets,
+            "unrecoverable_skipped": unrecoverable_skipped,
         }
 
     def list_routines(

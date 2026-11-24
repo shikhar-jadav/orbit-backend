@@ -1105,7 +1105,7 @@ class ReActAgent:
                 used_names = set(self.tools_by_name.keys())
 
                 for conn in connectors:
-                    if not conn.get("is_connected"):
+                    if not conn.get("is_connected") or conn.get("reconnect_required"):
                         continue
                     perms = conn.get("tool_permissions") or {}
                     for tool_def in conn.get("tools") or []:

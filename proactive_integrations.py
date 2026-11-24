@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
-import base64
 import re
 import threading
 from contextlib import contextmanager
@@ -13,27 +13,40 @@ from typing import Any, Optional
 from uuid import uuid4
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken
+from credential_vault import (
+    CredentialReconnectRequiredError,
+    CredentialUnrecoverableError,
+    CredentialVault,
+    CredentialVaultNotConfiguredError,
+)
 from database import PostgresDatabase
+
+
+RECONNECT_MESSAGE_TEMPLATE = (
+    "Your {provider} connection uses an outdated encryption key and needs to be reconnected."
+)
 
 
 class ProviderIntegrationStore:
     """PostgreSQL persistence for provider accounts and webhook bindings."""
 
     def __init__(
-        self, database: PostgresDatabase, encryption_key: Optional[str] = None
+        self,
+        database: PostgresDatabase,
+        encryption_key: Optional[str] = None,
+        vault: Optional[CredentialVault] = None,
     ):
         self.database = database
         self._lock = threading.Lock()
-        self._fernet = (
-            Fernet(encryption_key.encode("ascii"))
-            if encryption_key and encryption_key.strip()
-            else None
-        )
+        self._vault = vault if vault is not None else CredentialVault(key=encryption_key)
 
     @property
     def token_storage_configured(self) -> bool:
-        return self._fernet is not None
+        return self._vault.configured
+
+    @property
+    def vault(self) -> CredentialVault:
+        return self._vault
 
     @contextmanager
     def _connection(self):
@@ -56,22 +69,35 @@ class ProviderIntegrationStore:
 
         if not access_token.strip():
             raise ValueError("Provider access token cannot be empty.")
-        encrypted_access_token = self._encrypt(access_token)
-        encrypted_refresh_token = self._encrypt(refresh_token) if refresh_token else None
+        encrypted_access_token = self._encrypt(
+            access_token, user_id=user_id, integration=provider
+        )
+        encrypted_refresh_token = (
+            self._encrypt(refresh_token, user_id=user_id, integration=provider)
+            if refresh_token
+            else None
+        )
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._lock, self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO proactive_provider_accounts (
                     id, user_id, provider, provider_account_id, account_name,
-                    access_token, refresh_token, scopes, metadata, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    access_token, refresh_token, scopes, metadata,
+                    encryption_version, encryption_key_version,
+                    credential_status, credential_error,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(user_id, provider, provider_account_id) DO UPDATE SET
                     account_name = excluded.account_name,
                     access_token = excluded.access_token,
                     refresh_token = excluded.refresh_token,
                     scopes = excluded.scopes,
                     metadata = excluded.metadata,
+                    encryption_version = excluded.encryption_version,
+                    encryption_key_version = excluded.encryption_key_version,
+                    credential_status = 'active',
+                    credential_error = NULL,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -84,14 +110,61 @@ class ProviderIntegrationStore:
                     encrypted_refresh_token,
                     json.dumps(scopes or []),
                     json.dumps(metadata or {}),
+                    "v2",
+                    self._vault.key_version,
+                    "active",
+                    None,
                     now,
                     now,
                 ),
             )
         return self.get_account(user_id, provider, provider_account_id) or {}
 
+    def _mark_account_reconnect_required(
+        self,
+        user_id: str,
+        provider: str,
+        provider_account_id: str,
+        *,
+        encryption_version: str = "legacy-unrecoverable",
+        reason: Optional[str] = None,
+    ) -> None:
+        message = reason or RECONNECT_MESSAGE_TEMPLATE.format(provider=provider.title())
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """
+                UPDATE proactive_provider_accounts
+                SET credential_status = 'reconnect_required',
+                    encryption_version = %s,
+                    encryption_key_version = NULL,
+                    credential_error = %s
+                WHERE user_id = %s AND provider = %s AND provider_account_id = %s
+                """,
+                (encryption_version, message, user_id, provider, provider_account_id),
+            )
+
+    def _unrecoverable_account_stub(self, row: dict[str, Any]) -> dict[str, Any]:
+        account = dict(row)
+        provider = str(account.get("provider") or "integration")
+        account["access_token"] = None
+        account["refresh_token"] = None
+        account["scopes"] = json.loads(account.get("scopes") or "[]")
+        account["metadata"] = json.loads(account.get("metadata") or "{}")
+        account["credential_status"] = "reconnect_required"
+        account["reconnect_required"] = True
+        account["reconnect_message"] = (
+            account.get("credential_error")
+            or RECONNECT_MESSAGE_TEMPLATE.format(provider=provider.title())
+        )
+        return account
+
     def get_account(
-        self, user_id: str, provider: str, provider_account_id: Optional[str] = None
+        self,
+        user_id: str,
+        provider: str,
+        provider_account_id: Optional[str] = None,
+        *,
+        allow_unrecoverable: bool = False,
     ) -> Optional[dict[str, Any]]:
         query = """
             SELECT * FROM proactive_provider_accounts
@@ -104,9 +177,45 @@ class ProviderIntegrationStore:
         query += " ORDER BY updated_at DESC LIMIT 1"
         with self._connection() as conn:
             row = conn.execute(query, params).fetchone()
-        return self._decode_account(row) if row else None
+        if not row:
+            return None
 
-    def list_accounts(self, provider: Optional[str] = None) -> list[dict[str, Any]]:
+        if row.get("credential_status") == "reconnect_required":
+            if allow_unrecoverable:
+                return self._unrecoverable_account_stub(row)
+            raise CredentialReconnectRequiredError(
+                row.get("credential_error")
+                or RECONNECT_MESSAGE_TEMPLATE.format(provider=provider.title())
+            )
+
+        try:
+            return self._decode_account(row)
+        except CredentialUnrecoverableError as exc:
+            inspected = self._vault.inspect_value(row.get("access_token"))
+            enc_ver = inspected.get("encryption_version") or "legacy-unrecoverable"
+            if enc_ver in {"legacy-v1", "legacy-fernet"}:
+                enc_ver = "legacy-unrecoverable"
+            reason = RECONNECT_MESSAGE_TEMPLATE.format(provider=provider.title())
+            self._mark_account_reconnect_required(
+                row["user_id"],
+                row["provider"],
+                row["provider_account_id"],
+                encryption_version=enc_ver,
+                reason=reason,
+            )
+            if allow_unrecoverable:
+                stub = self._unrecoverable_account_stub(row)
+                stub["encryption_version"] = enc_ver
+                stub["reconnect_message"] = reason
+                return stub
+            raise CredentialReconnectRequiredError(reason) from exc
+
+    def list_accounts(
+        self,
+        provider: Optional[str] = None,
+        *,
+        include_unrecoverable: bool = False,
+    ) -> list[dict[str, Any]]:
         query = "SELECT * FROM proactive_provider_accounts"
         params: tuple[Any, ...] = ()
         if provider:
@@ -114,53 +223,107 @@ class ProviderIntegrationStore:
             params = (provider,)
         with self._connection() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [self._decode_account(row) for row in rows]
+
+        accounts: list[dict[str, Any]] = []
+        for row in rows:
+            if row.get("credential_status") == "reconnect_required":
+                if include_unrecoverable:
+                    accounts.append(self._unrecoverable_account_stub(row))
+                continue
+            try:
+                accounts.append(self._decode_account(row))
+            except CredentialUnrecoverableError:
+                inspected = self._vault.inspect_value(row.get("access_token"))
+                enc_ver = inspected.get("encryption_version") or "legacy-unrecoverable"
+                if enc_ver in {"legacy-v1", "legacy-fernet"}:
+                    enc_ver = "legacy-unrecoverable"
+                reason = RECONNECT_MESSAGE_TEMPLATE.format(
+                    provider=str(row.get("provider") or "integration").title()
+                )
+                self._mark_account_reconnect_required(
+                    row["user_id"],
+                    row["provider"],
+                    row["provider_account_id"],
+                    encryption_version=enc_ver,
+                    reason=reason,
+                )
+                if include_unrecoverable:
+                    stub = self._unrecoverable_account_stub(row)
+                    stub["encryption_version"] = enc_ver
+                    stub["reconnect_message"] = reason
+                    accounts.append(stub)
+        return accounts
 
     def _decode_account(self, row: dict[str, Any]) -> dict[str, Any]:
         account = dict(row)
-        account["access_token"] = self._decrypt(account["access_token"])
+        user_id = str(account["user_id"])
+        provider = str(account["provider"])
+        account["access_token"] = self._decrypt(
+            account["access_token"], user_id=user_id, integration=provider
+        )
         if account.get("refresh_token"):
-            account["refresh_token"] = self._decrypt(account["refresh_token"])
+            account["refresh_token"] = self._decrypt(
+                account["refresh_token"], user_id=user_id, integration=provider
+            )
         account["scopes"] = json.loads(account.get("scopes") or "[]")
         account["metadata"] = json.loads(account.get("metadata") or "{}")
+        account["credential_status"] = account.get("credential_status") or "active"
+        account["reconnect_required"] = account["credential_status"] == "reconnect_required"
         return account
 
-    def _encrypt(self, value: str) -> str:
-        if not self._fernet:
-            raise RuntimeError(
-                "Set INTEGRATION_TOKEN_ENCRYPTION_KEY before connecting provider accounts."
+    def _encrypt(self, value: str, *, user_id: str, integration: str) -> str:
+        if not self._vault.configured:
+            raise CredentialVaultNotConfiguredError(
+                "Set INTEGRATION_ENCRYPTION_KEY before connecting provider accounts."
             )
-        return self._fernet.encrypt(value.encode("utf-8")).decode("ascii")
+        return self._vault.encrypt_text(value, user_id=user_id, integration=integration)
 
-    def _decrypt(self, value: str) -> str:
-        if not self._fernet:
-            raise RuntimeError(
-                "Set INTEGRATION_TOKEN_ENCRYPTION_KEY to use connected provider accounts."
+    def _decrypt(self, value: str, *, user_id: str, integration: str) -> str:
+        if not self._vault.configured:
+            raise CredentialVaultNotConfiguredError(
+                "Set INTEGRATION_ENCRYPTION_KEY to use connected provider accounts."
             )
-        try:
-            return self._fernet.decrypt(value.encode("ascii")).decode("utf-8")
-        except (InvalidToken, UnicodeDecodeError) as exc:
-            raise RuntimeError(
-                "Provider token decryption failed; verify INTEGRATION_TOKEN_ENCRYPTION_KEY."
-            ) from exc
+        return self._vault.decrypt_text(value, user_id=user_id, integration=integration)
 
     def public_accounts(self, user_id: str) -> list[dict[str, Any]]:
         with self._connection() as conn:
             rows = conn.execute(
                 """
-                SELECT provider, provider_account_id, account_name, scopes, updated_at
+                SELECT provider, provider_account_id, account_name, scopes, updated_at,
+                       encryption_version, encryption_key_version,
+                       credential_status, credential_error
                 FROM proactive_provider_accounts WHERE user_id = %s
                 ORDER BY provider, account_name
                 """,
                 (user_id,),
             ).fetchall()
-        return [
-            {
-                **dict(row),
-                "scopes": json.loads(row["scopes"] or "[]"),
-            }
-            for row in rows
-        ]
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            status = item.get("credential_status") or "active"
+            reconnect_required = status == "reconnect_required"
+            results.append(
+                {
+                    "provider": item["provider"],
+                    "provider_account_id": item["provider_account_id"],
+                    "account_name": item["account_name"],
+                    "scopes": json.loads(item["scopes"] or "[]"),
+                    "updated_at": item["updated_at"],
+                    "encryption_version": item.get("encryption_version"),
+                    "encryption_key_version": item.get("encryption_key_version"),
+                    "credential_status": status,
+                    "reconnect_required": reconnect_required,
+                    "reconnect_message": (
+                        item.get("credential_error")
+                        or RECONNECT_MESSAGE_TEMPLATE.format(
+                            provider=str(item["provider"]).title()
+                        )
+                    )
+                    if reconnect_required
+                    else None,
+                }
+            )
+        return results
 
     def delete_account(
         self,
@@ -283,19 +446,31 @@ class ProviderIntegrationStore:
             "secret": secret,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
-        encrypted_hook = {
-            **hook,
-            "token": hashlib.sha256(token.encode("utf-8")).hexdigest(),
-            "secret": self._encrypt(secret),
-        }
+        encrypted_secret = self._encrypt(
+            secret, user_id=user_id, integration="github_webhook"
+        )
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self._lock, self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO proactive_github_hooks
-                    (id, token, user_id, repository, routine_id, hook_id, secret, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (id, token, user_id, repository, routine_id, hook_id, secret,
+                     encryption_version, encryption_key_version, credential_status, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                tuple(encrypted_hook.values()),
+                (
+                    hook["id"],
+                    token_hash,
+                    user_id,
+                    hook["repository"],
+                    routine_id,
+                    hook_id,
+                    encrypted_secret,
+                    "v2",
+                    self._vault.key_version,
+                    "active",
+                    hook["created_at"],
+                ),
             )
         return hook
 
@@ -312,7 +487,27 @@ class ProviderIntegrationStore:
         if not row:
             return None
         hook = dict(row)
-        hook["secret"] = self._decrypt(hook["secret"])
+        try:
+            hook["secret"] = self._decrypt(
+                hook["secret"],
+                user_id=str(hook["user_id"]),
+                integration="github_webhook",
+            )
+        except CredentialUnrecoverableError as exc:
+            with self._lock, self._connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE proactive_github_hooks
+                    SET credential_status = 'reconnect_required',
+                        encryption_version = 'legacy-unrecoverable',
+                        encryption_key_version = NULL
+                    WHERE id = %s
+                    """,
+                    (hook["id"],),
+                )
+            raise CredentialReconnectRequiredError(
+                "GitHub webhook secret uses an outdated encryption key and requires reconnection."
+            ) from exc
         return hook
 
     def list_github_hooks_for_routine(self, routine_id: str) -> list[dict[str, Any]]:
@@ -367,6 +562,182 @@ class ProviderIntegrationStore:
                     )
                     migrated += 1
         return migrated
+
+    def reconcile_legacy_credentials(self) -> dict[str, int]:
+        """Detect undecryptable provider/hook credentials and mark reconnect_required.
+
+        Never deletes rows or marks unrecoverable ciphertext as migrated.
+        """
+        accounts_marked = 0
+        hooks_marked = 0
+        with self._lock, self._connection() as conn:
+            account_rows = conn.execute(
+                """
+                SELECT id, user_id, provider, provider_account_id, access_token, refresh_token,
+                       credential_status
+                FROM proactive_provider_accounts
+                """
+            ).fetchall()
+            for row in account_rows:
+                if row.get("credential_status") == "reconnect_required":
+                    continue
+                user_id = str(row["user_id"])
+                provider = str(row["provider"])
+                try:
+                    if self._vault.configured:
+                        self._vault.decrypt_text(
+                            row["access_token"], user_id=user_id, integration=provider
+                        )
+                        if row.get("refresh_token"):
+                            self._vault.decrypt_text(
+                                row["refresh_token"], user_id=user_id, integration=provider
+                            )
+                        continue
+                    elif not self._vault.is_legacy_ciphertext(row.get("access_token") or ""):
+                        continue
+                except CredentialUnrecoverableError:
+                    pass
+
+                if self._vault.configured or self._vault.is_legacy_ciphertext(
+                    row.get("access_token") or ""
+                ):
+                    reason = RECONNECT_MESSAGE_TEMPLATE.format(provider=provider.title())
+                    conn.execute(
+                        """
+                        UPDATE proactive_provider_accounts
+                        SET credential_status = 'reconnect_required',
+                            encryption_version = 'legacy-unrecoverable',
+                            encryption_key_version = NULL,
+                            credential_error = %s
+                        WHERE id = %s
+                        """,
+                        (reason, row["id"]),
+                    )
+                    accounts_marked += 1
+
+            hook_rows = conn.execute(
+                """
+                SELECT id, user_id, secret, credential_status
+                FROM proactive_github_hooks
+                """
+            ).fetchall()
+            for row in hook_rows:
+                if row.get("credential_status") == "reconnect_required":
+                    continue
+                try:
+                    if self._vault.configured:
+                        self._vault.decrypt_text(
+                            row["secret"],
+                            user_id=str(row["user_id"]),
+                            integration="github_webhook",
+                        )
+                        continue
+                    elif not self._vault.is_legacy_ciphertext(row.get("secret") or ""):
+                        continue
+                except CredentialUnrecoverableError:
+                    pass
+
+                if self._vault.configured or self._vault.is_legacy_ciphertext(
+                    row.get("secret") or ""
+                ):
+                    conn.execute(
+                        """
+                        UPDATE proactive_github_hooks
+                        SET credential_status = 'reconnect_required',
+                            encryption_version = 'legacy-unrecoverable',
+                            encryption_key_version = NULL
+                        WHERE id = %s
+                        """,
+                        (row["id"],),
+                    )
+                    hooks_marked += 1
+
+        return {
+            "accounts_marked_reconnect_required": accounts_marked,
+            "hooks_marked_reconnect_required": hooks_marked,
+        }
+
+    def rotate_credentials(self) -> dict[str, int]:
+        """Re-encrypt active credentials encrypted under a previous key version."""
+        if not self._vault.configured:
+            raise CredentialVaultNotConfiguredError(
+                "Configure INTEGRATION_ENCRYPTION_KEY before rotating credentials."
+            )
+        accounts_rotated = 0
+        hooks_rotated = 0
+        with self._lock, self._connection() as conn:
+            account_rows = conn.execute(
+                """
+                SELECT id, user_id, provider, access_token, refresh_token, credential_status
+                FROM proactive_provider_accounts
+                WHERE credential_status IS NULL OR credential_status = 'active'
+                """
+            ).fetchall()
+            for row in account_rows:
+                user_id = str(row["user_id"])
+                provider = str(row["provider"])
+                access_val = row.get("access_token") or ""
+                refresh_val = row.get("refresh_token") or ""
+                if not (
+                    self._vault.needs_rotation(access_val)
+                    or (refresh_val and self._vault.needs_rotation(refresh_val))
+                ):
+                    continue
+                new_access = self._vault.reencrypt_text(
+                    access_val, user_id=user_id, integration=provider
+                )
+                new_refresh = (
+                    self._vault.reencrypt_text(
+                        refresh_val, user_id=user_id, integration=provider
+                    )
+                    if refresh_val
+                    else None
+                )
+                conn.execute(
+                    """
+                    UPDATE proactive_provider_accounts
+                    SET access_token = %s,
+                        refresh_token = %s,
+                        encryption_version = 'v2',
+                        encryption_key_version = %s
+                    WHERE id = %s
+                    """,
+                    (new_access, new_refresh, self._vault.key_version, row["id"]),
+                )
+                accounts_rotated += 1
+
+            hook_rows = conn.execute(
+                """
+                SELECT id, user_id, secret, credential_status
+                FROM proactive_github_hooks
+                WHERE credential_status IS NULL OR credential_status = 'active'
+                """
+            ).fetchall()
+            for row in hook_rows:
+                secret_val = row.get("secret") or ""
+                if not self._vault.needs_rotation(secret_val):
+                    continue
+                new_secret = self._vault.reencrypt_text(
+                    secret_val,
+                    user_id=str(row["user_id"]),
+                    integration="github_webhook",
+                )
+                conn.execute(
+                    """
+                    UPDATE proactive_github_hooks
+                    SET secret = %s,
+                        encryption_version = 'v2',
+                        encryption_key_version = %s
+                    WHERE id = %s
+                    """,
+                    (new_secret, self._vault.key_version, row["id"]),
+                )
+                hooks_rotated += 1
+
+        return {
+            "accounts_rotated": accounts_rotated,
+            "hooks_rotated": hooks_rotated,
+        }
 
 
 def verify_github_signature(secret: str, body: bytes, signature: Optional[str]) -> bool:
