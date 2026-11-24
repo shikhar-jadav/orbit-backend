@@ -27,6 +27,22 @@ from tools import AGENT_TOOLS, ALL_AGENT_TOOLS, WORKSPACE_AGENT_TOOLS
 import policy_engine
 
 
+
+def _collapse_exact_repeated_response(text: str) -> str:
+    """Remove a response block repeated verbatim by successive agent turns."""
+    value = (text or "").strip()
+    if not value:
+        return ""
+    paragraphs = re.split(r"\n\s*\n", value)
+    if len(paragraphs) >= 2 and len(paragraphs) % 2 == 0:
+        midpoint = len(paragraphs) // 2
+        first = " ".join(" ".join(paragraphs[:midpoint]).split())
+        second = " ".join(" ".join(paragraphs[midpoint:]).split())
+        if first and first == second:
+            return "\n\n".join(paragraphs[:midpoint]).strip()
+    return value
+
+
 SYSTEM_PROMPT = """You are Orbit, an autonomous AI companion and proactive assistant. You combine deep reasoning, coding, persistent memory, proactive automation, and multi-service workflows to help users get things done.
 
 Your goal is not just to answer questions. Your goal is to understand the user's objective, take appropriate actions, and deliver verified results.
@@ -1131,6 +1147,9 @@ class ReActAgent:
         # 2. ReAct Streaming Loop
         final_answer_text = ""
         last_tool_outputs: List[str] = []
+        # Prevent duplicate file mutations when the model repeats an identical
+        # workspace write tool call within one ReAct run.
+        executed_workspace_writes: Dict[str, str] = {}
         current_turn = 0
         resumed_from_interrupt = False
 
@@ -1238,6 +1257,29 @@ class ReActAgent:
                     tool_name = tc.get("name")
                     tool_args = tc.get("args", {})
                     tool_id = tc.get("id") or f"call_{uuid4().hex[:8]}"
+
+                    # A repeated identical write call in the same run is almost
+                    # always an accidental duplicate tool request. Reuse its
+                    # first result without executing or rendering it again.
+                    write_action = (
+                        str(tool_args.get("action", "")).lower()
+                        if isinstance(tool_args, dict)
+                        else ""
+                    )
+                    is_workspace_write = (
+                        tool_name == "workspace_files"
+                        and write_action in {"create", "replace", "append", "edit", "copy"}
+                    ) or tool_name in {"create_file", "write_workspace_file", "edit_workspace_file"}
+                    write_signature = (
+                        json.dumps([tool_name, tool_args], sort_keys=True, ensure_ascii=False, default=str)
+                        if is_workspace_write
+                        else ""
+                    )
+                    if write_signature and write_signature in executed_workspace_writes:
+                        previous_output = executed_workspace_writes[write_signature]
+                        messages.append(ToolMessage(content=previous_output, tool_call_id=tool_id))
+                        last_tool_outputs.append(previous_output)
+                        continue
 
                     yield {
                         "type": "tool_start",
@@ -1889,6 +1931,8 @@ class ReActAgent:
                         tool_result = f"Error: Tool '{tool_name}' not found."
 
                     tool_output = str(tool_result)
+                    if write_signature:
+                        executed_workspace_writes[write_signature] = tool_output
 
                     yield {
                         "type": "tool_end",
@@ -1914,7 +1958,7 @@ class ReActAgent:
         yield {
             "type": "done",
             "data": {
-                "content": final_answer_text.strip(),
+                "content": _collapse_exact_repeated_response(final_answer_text),
                 "provider": provider.to_dict(),
                 "request_num": req_num,
             },
