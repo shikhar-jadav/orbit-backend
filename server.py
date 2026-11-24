@@ -368,9 +368,41 @@ def _initialize_application_state() -> None:
         proactive_store = ProactiveStore(database)
         provider_integration_store = ProviderIntegrationStore(
             database,
-            encryption_key=os.getenv("INTEGRATION_TOKEN_ENCRYPTION_KEY"),
+            encryption_key=(
+                os.getenv("INTEGRATION_TOKEN_ENCRYPTION_KEY")
+                or os.getenv("ORBIT_CREDENTIAL_ENCRYPTION_KEY")
+            ),
         )
         gmail_mcp_server.configure_provider_integration_store(provider_integration_store)
+        try:
+            interrupted_approvals = chat_store.interrupt_pending_approvals()
+            if interrupted_approvals:
+                print(
+                    f"[SECURITY] Marked {interrupted_approvals} pending approvals as interrupted after restart.",
+                    flush=True,
+                )
+        except Exception as approval_recovery_error:
+            print(f"[SECURITY] Could not reconcile pending approvals: {approval_recovery_error}", flush=True)
+        try:
+            migrated = chat_store.migrate_legacy_connector_credentials()
+            print(f"[SECURITY] Credential migration complete: {migrated}", flush=True)
+        except Exception as migration_error:
+            # Keep the API available, but encrypted-credential reads fail closed.
+            print(f"[SECURITY] Credential migration incomplete: {migration_error}", flush=True)
+        try:
+            webhook_migrated = proactive_store.migrate_webhook_credentials()
+            print(f"[SECURITY] Webhook credential migration complete: {webhook_migrated}", flush=True)
+        except Exception as migration_error:
+            print(f"[SECURITY] Webhook credential migration incomplete: {migration_error}", flush=True)
+        try:
+            github_hook_tokens_migrated = provider_integration_store.migrate_github_hook_tokens()
+            if github_hook_tokens_migrated:
+                print(
+                    f"[SECURITY] Hashed {github_hook_tokens_migrated} legacy GitHub webhook callback tokens.",
+                    flush=True,
+                )
+        except Exception as migration_error:
+            print(f"[SECURITY] GitHub webhook token migration incomplete: {migration_error}", flush=True)
         proactive_engine = ProactiveEngine(
             store=proactive_store,
             agent=agent,
@@ -1730,6 +1762,7 @@ PENDING_MCP_OAUTH_SESSIONS: Dict[str, Dict[str, Any]] = {}
 PENDING_EVENT_OAUTH_STATES: Dict[str, Dict[str, Any]] = {}
 GMAIL_WATCH_RENEWAL_TASK: Optional[asyncio.Task] = None
 ACTIVE_CHAT_INTERRUPTS: Dict[str, asyncio.Future] = {}
+ACTIVE_CHAT_INTERRUPT_OWNERS: Dict[str, str] = {}
 
 
 @app.get("/settings/preferences")
@@ -2639,6 +2672,12 @@ async def create_event_routine_endpoint(
 
     webhook_token = secrets.token_urlsafe(24) if source == "webhook" else None
     webhook_secret = secrets.token_hex(32) if source in {"webhook", "github"} else None
+    from credential_vault import CredentialVault
+    if webhook_secret and not CredentialVault().configured:
+        raise HTTPException(
+            status_code=503,
+            detail="Configure INTEGRATION_TOKEN_ENCRYPTION_KEY before creating webhook triggers.",
+        )
     if source == "github":
         repository_condition = {
             "field": "payload.repository",
@@ -4620,6 +4659,15 @@ async def delete_personal_skill(
     return {"ok": True}
 
 
+def _get_personal_connector_with_secrets(user_id: str, connector_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        return chat_store.get_personal_connector(
+            user_id, connector_id, include_secrets=True
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 def _headers_list_to_dict(headers: List[Dict[str, str]]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for item in headers[:4]:
@@ -4695,18 +4743,21 @@ async def create_personal_connector(
         except Exception:
             pass
 
-    record = chat_store.create_personal_connector(
-        current_user["user_id"],
-        name=name,
-        mcp_url=mcp_url,
-        connector_type=body.connector_type,
-        auth_mode=body.auth_mode,
-        headers=body.headers,
-        advanced=adv_payload,
-        tools=discovered_tools,
-        is_connected=is_connected,
-        last_status_code=last_status_code,
-    )
+    try:
+        record = chat_store.create_personal_connector(
+            current_user["user_id"],
+            name=name,
+            mcp_url=mcp_url,
+            connector_type=body.connector_type,
+            auth_mode=body.auth_mode,
+            headers=body.headers,
+            advanced=adv_payload,
+            tools=discovered_tools,
+            is_connected=is_connected,
+            last_status_code=last_status_code,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     if connect_error:
         return {**record, "connect_error": connect_error}
     return record
@@ -4728,16 +4779,19 @@ async def update_personal_connector(
     if body.name is not None and not body.name.strip():
         raise HTTPException(status_code=400, detail="Connector name cannot be empty.")
 
-    updated = chat_store.update_personal_connector(
-        current_user["user_id"],
-        connector_id,
-        name=body.name,
-        mcp_url=validated_url,
-        auth_mode=body.auth_mode,
-        headers=body.headers,
-        advanced=body.advanced,
-        tool_permissions=body.tool_permissions,
-    )
+    try:
+        updated = chat_store.update_personal_connector(
+            current_user["user_id"],
+            connector_id,
+            name=body.name,
+            mcp_url=validated_url,
+            auth_mode=body.auth_mode,
+            headers=body.headers,
+            advanced=body.advanced,
+            tool_permissions=body.tool_permissions,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     if not updated:
         raise HTTPException(status_code=404, detail="Connector not found.")
     return updated
@@ -4749,9 +4803,7 @@ async def connect_personal_connector(
     connector_id: str,
     current_user: Dict[str, Any] = Depends(require_user),
 ):
-    existing = chat_store.get_personal_connector(
-        current_user["user_id"], connector_id, include_secrets=True
-    )
+    existing = _get_personal_connector_with_secrets(current_user["user_id"], connector_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Connector not found.")
 
@@ -4996,7 +5048,7 @@ p {{ margin: 0; color: #a1a1aa; font-size: 13.5px; line-height: 1.5; }}
                 raise RuntimeError("OAuth server did not return an access_token.")
 
             auth_header_val = f"Bearer {access_token}"
-            existing = chat_store.get_personal_connector(user_id, connector_id, include_secrets=True)
+            existing = _get_personal_connector_with_secrets(user_id, connector_id)
             cur_headers = existing.get("headers", []) if existing else []
             clean_headers = [
                 h for h in cur_headers if str(h.get("key", "")).strip().lower() != "authorization"
@@ -5252,6 +5304,7 @@ async def agui_endpoint(
                 target_user_id=user_id,
                 chat_store=chat_store,
                 active_interrupts=ACTIVE_CHAT_INTERRUPTS,
+                active_interrupt_owners=ACTIVE_CHAT_INTERRUPT_OWNERS,
             ):
                 event_type = event.get("type")
                 data = event.get("data", {})
@@ -5972,7 +6025,8 @@ async def chat_stream_endpoint(
     if not agent or not provider_manager:
         raise HTTPException(status_code=500, detail="Agent is not initialized. Check .env")
 
-    # Native talos-style interrupt resume directly via chat endpoint
+    # Resume only the exact interrupt owned by the authenticated user. Never fall
+    # back to another user's most-recent in-memory Future.
     if request.resume is not None:
         int_id = request.interrupt_id
         if not int_id and isinstance(request.resume, dict):
@@ -5980,30 +6034,80 @@ async def chat_stream_endpoint(
 
         fut = None
         if int_id:
-            fut = ACTIVE_CHAT_INTERRUPTS.get(int_id)
-        if not fut and ACTIVE_CHAT_INTERRUPTS:
-            fut = list(ACTIVE_CHAT_INTERRUPTS.values())[-1]
+            owner_id = ACTIVE_CHAT_INTERRUPT_OWNERS.get(str(int_id))
+            if owner_id != current_user["user_id"]:
+                raise HTTPException(status_code=404, detail="Interrupt not found.")
+            fut = ACTIVE_CHAT_INTERRUPTS.get(str(int_id))
+            if not fut or fut.done():
+                raise HTTPException(status_code=410, detail="This interrupt has expired. Please retry the action.")
 
         resume_val = (
             request.resume
             if isinstance(request.resume, dict)
-            else {"answers": request.resume, "action": "approve"}
+            else {"answers": request.resume, "action": "answer"}
         )
 
         if fut and not fut.done():
+            approval = chat_store.get_approval(str(int_id))
+            if approval and approval.get("user_id") != current_user["user_id"]:
+                raise HTTPException(status_code=404, detail="Interrupt not found.")
+            if approval and approval.get("status") == "pending":
+                action = str(resume_val.get("action") or "").lower()
+                selected = [
+                    str(item).strip().lower()
+                    for item in (resume_val.get("selected_titles") or [])
+                ]
+                is_decline = action in {"decline", "reject", "block", "deny", "cancel", "skip"} or any(
+                    any(word in item for word in ("decline", "reject", "block", "deny", "cancel"))
+                    for item in selected
+                )
+                is_approve = not is_decline and (
+                    action in {"approve", "allow", "yes", "proceed", "once", "continue"}
+                    or any(
+                        item.startswith((
+                            "allow once", "approve action", "approve for this session",
+                            "allow all script runs", "allow execution", "always allow",
+                        ))
+                        for item in selected
+                    )
+                )
+                if not (is_approve or is_decline):
+                    raise HTTPException(status_code=422, detail="Choose Approve once or Decline.")
+                if (
+                    is_approve
+                    and not is_decline
+                    and resume_val.get("always_allow")
+                    and approval.get("risk_level") != "critical"
+                    and approval.get("connector_id")
+                    and resume_val.get("connector_id") == approval.get("connector_id")
+                    and resume_val.get("tool_name") == approval.get("tool_name")
+                ):
+                    existing = chat_store.get_personal_connector(
+                        current_user["user_id"], approval["connector_id"]
+                    )
+                    if existing:
+                        permissions = dict(existing.get("tool_permissions") or {})
+                        permissions[approval["tool_name"]] = "allow"
+                        chat_store.update_personal_connector(
+                            current_user["user_id"], approval["connector_id"],
+                            tool_permissions=permissions,
+                        )
+                if approval.get("risk_level") == "critical":
+                    resume_val["always_allow"] = False
+                chat_store.update_approval(
+                    str(int_id),
+                    status="rejected" if is_decline else "approved",
+                    decision=resume_val,
+                    user_id=current_user["user_id"],
+                )
             fut.set_result(resume_val)
             if int_id:
-                try:
-                    chat_store.update_approval(
-                        int_id,
-                        status="approved" if resume_val.get("action") != "decline" else "rejected",
-                        decision=resume_val,
-                    )
-                except Exception:
-                    pass
+                ACTIVE_CHAT_INTERRUPT_OWNERS.pop(str(int_id), None)
+            ACTIVE_CHAT_INTERRUPT_OWNERS.pop(str(int_id), None)
             return JSONResponse({"status": "resumed", "interrupt_id": int_id})
 
-        # If previous stream had already closed, synthesize resume message and continue ReAct run
+        # Non-interrupt resume messages continue as a new user turn; no pending
+        # approval is granted by this fallback path.
         if isinstance(request.resume, dict) and request.resume.get("answers"):
             ans_map = request.resume["answers"]
             lines = ["User provided choices:"]
@@ -6479,7 +6583,7 @@ async def regenerate_chat_endpoint(
 
 
 class ChatInterruptResumeRequest(BaseModel):
-    action: str = "approve"  # "approve", "decline", "skip", "answer"
+    action: str = ""  # "approve", "decline", "skip", "answer"
     always_allow: bool = False
     selected_titles: Optional[List[str]] = None
     custom_text: Optional[str] = None
@@ -6493,15 +6597,49 @@ class ChatInterruptResumeRequest(BaseModel):
 async def resume_chat_interrupt_endpoint(
     interrupt_id: str,
     payload: ChatInterruptResumeRequest,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    current_user: Dict[str, Any] = Depends(require_user),
 ):
-    """
-    Resume an in-flight paused agent stream instantly when user answers a question or approves a tool.
-    Does NOT spawn a separate chat message or break the SSE stream.
-    """
-    user_id = current_user.get("user_id") if isinstance(current_user, dict) else None
-    if user_id and payload.always_allow and payload.connector_id and payload.tool_name:
-        try:
+    """Resume only an interrupt belonging to the authenticated user."""
+    user_id = current_user["user_id"]
+    if ACTIVE_CHAT_INTERRUPT_OWNERS.get(interrupt_id) != user_id:
+        raise HTTPException(status_code=404, detail="Interrupt not found.")
+
+    fut = ACTIVE_CHAT_INTERRUPTS.get(interrupt_id)
+    if not fut or fut.done():
+        raise HTTPException(status_code=410, detail="This interrupt has expired. Please retry the action.")
+
+    approval = chat_store.get_approval(interrupt_id)
+    if approval and approval.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Interrupt not found.")
+    if approval and approval.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="This approval has already been resolved.")
+
+    data_dict = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    action = str(data_dict.get("action") or "").lower()
+    is_decline = action in {"decline", "reject", "block", "deny", "cancel", "skip"}
+    selected = [str(item).strip().lower() for item in (data_dict.get("selected_titles") or [])]
+    explicit_approve = action in {"approve", "allow", "yes", "proceed", "once", "continue"}
+    explicit_approve = explicit_approve or any(
+        item in {
+            "allow once (recommended)",
+            "approve action (recommended)",
+            "approve action (proceed with execution)",
+            "allow execution (recommended)",
+        }
+        for item in selected
+    )
+    explicit_decline = is_decline or any(
+        any(word in item for word in ("decline", "reject", "deny", "block", "cancel"))
+        for item in selected
+    )
+
+    if approval and not (explicit_approve or explicit_decline):
+        raise HTTPException(status_code=422, detail="Choose Approve once or Decline.")
+    if approval and approval.get("risk_level") == "critical":
+        data_dict["always_allow"] = False
+
+    if explicit_approve and not explicit_decline and payload.always_allow and approval and approval.get("risk_level") != "critical":
+        if payload.connector_id and payload.tool_name:
             existing = chat_store.get_personal_connector(user_id, payload.connector_id)
             if existing:
                 perms = dict(existing.get("tool_permissions") or {})
@@ -6511,32 +6649,19 @@ async def resume_chat_interrupt_endpoint(
                     payload.connector_id,
                     tool_permissions=perms,
                 )
-        except Exception as e:
-            print(f"[Interrupt Resume] Error saving always_allow permission: {e}")
 
-    fut = ACTIVE_CHAT_INTERRUPTS.get(interrupt_id)
-    if not fut:
-        # Fallback check by substring, prefix, or tool_call_id
-        for k, v in list(ACTIVE_CHAT_INTERRUPTS.items()):
-            if k == interrupt_id or k in interrupt_id or interrupt_id in k:
-                fut = v
-                break
-
-    if not fut or fut.done():
-        return {"ok": True, "resumed": False, "message": "Interrupt was already completed or expired."}
-
-    data_dict = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    data_dict["action"] = "decline" if explicit_decline else ("approve" if explicit_approve else action)
+    if approval and approval.get("status") == "pending":
+        chat_store.update_approval(
+            interrupt_id,
+            status="rejected" if explicit_decline else "approved",
+            decision=data_dict,
+            user_id=user_id,
+        )
     fut.set_result(data_dict)
+    ACTIVE_CHAT_INTERRUPT_OWNERS.pop(interrupt_id, None)
 
-    # Persist decision to approvals table if this was an approval interrupt
-    try:
-        is_decline = payload.action in ("decline", "reject", "block", "deny", "cancel", "skip")
-        appr_status = "rejected" if is_decline else "approved"
-        chat_store.update_approval(interrupt_id, status=appr_status, decision=data_dict)
-    except Exception as ae:
-        print(f"[Interrupt Resume] Error updating approval record: {ae}")
-
-    print(f"[Interrupt Resume] Resumed interrupt '{interrupt_id}' instantly.")
+    print(f"[Interrupt Resume] Resumed interrupt '{interrupt_id}' for its owner.")
     return {"ok": True, "resumed": True}
 
 
@@ -6545,11 +6670,12 @@ async def resume_chat_interrupt_endpoint(
 async def list_approvals_endpoint(
     status: Optional[str] = None,
     limit: int = 50,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    current_user: Dict[str, Any] = Depends(require_user),
 ):
-    """List pending and resolved approvals for the current user/organization."""
-    user_id = current_user.get("user_id") if isinstance(current_user, dict) else None
-    approvals = chat_store.list_approvals(user_id=user_id, status=status, limit=limit)
+    """List approvals belonging only to the authenticated user."""
+    approvals = chat_store.list_approvals(
+        user_id=current_user["user_id"], status=status, limit=limit
+    )
     return {"ok": True, "approvals": approvals}
 
 
@@ -6557,11 +6683,10 @@ async def list_approvals_endpoint(
 @app.get("/api/audit-logs")
 async def list_audit_logs_endpoint(
     limit: int = 100,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    current_user: Dict[str, Any] = Depends(require_user),
 ):
-    """Retrieve immutable action audit history across tools, policies, and approvals."""
-    user_id = current_user.get("user_id") if isinstance(current_user, dict) else None
-    logs = chat_store.list_audit_logs(user_id=user_id, limit=limit)
+    """Retrieve only the authenticated user's action audit history."""
+    logs = chat_store.list_audit_logs(user_id=current_user["user_id"], limit=limit)
     return {"ok": True, "audit_logs": logs}
 
 
@@ -7297,7 +7422,10 @@ async def get_marketplace_catalog(current_user: Dict[str, Any] = Depends(require
     """Retrieve full catalog of connectors and modular skills."""
     user_id = current_user["user_id"]
     skills = marketplace.list_available_skills(chat_store=chat_store, user_id=user_id)
-    connectors = marketplace.list_connectors_with_status(chat_store, user_id=user_id, provider_integration_store=provider_integration_store)
+    try:
+        connectors = marketplace.list_connectors_with_status(chat_store, user_id=user_id, provider_integration_store=provider_integration_store)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     installed_skills_count = sum(1 for s in skills if s.get("is_installed"))
     active_connectors_count = sum(1 for c in connectors if c.get("is_enabled"))
 
@@ -7364,6 +7492,8 @@ async def configure_connector_endpoint(
         return result
     except KeyError:
         raise HTTPException(status_code=404, detail="Connector not found.")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 @app.post("/marketplace/connectors/{connector_id}/toggle")
 @app.post("/api/marketplace/connectors/{connector_id}/toggle")

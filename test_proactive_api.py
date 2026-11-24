@@ -698,6 +698,7 @@ def test_slack_event_callback_verifies_signature_and_queues_matching_event(
     monkeypatch.setenv("ORBIT_PUBLIC_URL", "https://orbit.example.test")
     signing_secret = "slack-signing-secret"
     monkeypatch.setenv("SLACK_SIGNING_SECRET", signing_secret)
+    monkeypatch.setenv("SLACK_EVENTS_READY", "true")
     store.save_account(
         user_id=user_id,
         provider="slack",
@@ -1008,3 +1009,81 @@ def test_gmail_message_limit_rejects_batch_without_advancing_cursor(
         store.get_gmail_watch_state("gmail-limit-user", "limit@example.com")["history_id"]
         == "100"
     )
+
+def test_custom_webhook_credentials_are_protected_at_rest(test_client, auth_headers):
+    headers, user_id = auth_headers
+    webhook_token = "orbit-test-webhook-bearer-token"
+    webhook_secret = "orbit-test-webhook-signing-secret"
+    routine = server.proactive_store.create_routine(
+        user_id=user_id,
+        name="Encrypted webhook",
+        action_prompt="Summarize the incoming event.",
+        trigger_type="webhook",
+        webhook_token=webhook_token,
+        webhook_secret=webhook_secret,
+    )
+
+    with server.database.connection() as connection:
+        row = connection.execute(
+            "SELECT webhook_token, webhook_secret FROM proactive_routines WHERE id = %s",
+            (routine["id"],),
+        ).fetchone()
+    assert row["webhook_token"] != webhook_token
+    assert webhook_token not in row["webhook_token"]
+    assert webhook_secret not in row["webhook_secret"]
+    assert row["webhook_secret"].startswith("enc:v1:")
+
+    found = server.proactive_store.get_routine_by_webhook(webhook_token)
+    assert found is not None
+    assert found["webhook_secret"] == webhook_secret
+
+    listed = server.proactive_store.list_routines(user_id=user_id)
+    listed_routine = next(item for item in listed if item["id"] == routine["id"])
+    assert "webhook_token" not in listed_routine
+    assert "webhook_secret" not in listed_routine
+
+    accepted = test_client.post(
+        f"/api/webhooks/{webhook_token}",
+        json={"event": "test"},
+        headers={"Authorization": f"Bearer {webhook_secret}"},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "accepted"
+
+
+def test_legacy_webhook_credentials_are_migrated(postgres_database):
+    from credential_vault import CredentialVault
+
+    store = ProactiveStore(postgres_database)
+    routine = store.create_routine(
+        user_id="legacy-webhook-user",
+        name="Legacy webhook",
+        action_prompt="Process alert",
+        trigger_type="webhook",
+        webhook_token="legacy-webhook-token",
+        webhook_secret="legacy-webhook-secret",
+    )
+
+    with postgres_database.connection() as connection:
+        connection.execute(
+            """
+            UPDATE proactive_routines
+            SET webhook_token = %s, webhook_secret = %s
+            WHERE id = %s
+            """,
+            ("legacy-raw-token", "legacy-raw-secret", routine["id"]),
+        )
+
+    migrated = store.migrate_webhook_credentials()
+    assert migrated["webhook_tokens_hashed"] >= 1
+    assert migrated["webhook_secrets_encrypted"] >= 1
+    with postgres_database.connection() as connection:
+        row = connection.execute(
+            "SELECT webhook_token, webhook_secret FROM proactive_routines WHERE id = %s",
+            (routine["id"],),
+        ).fetchone()
+    assert row["webhook_token"] != "legacy-raw-token"
+    assert row["webhook_secret"] != "legacy-raw-secret"
+    assert CredentialVault().decrypt_text(row["webhook_secret"]) == "legacy-raw-secret"
+    assert store.get_routine_by_webhook("legacy-raw-token")["webhook_secret"] == "legacy-raw-secret"
+
