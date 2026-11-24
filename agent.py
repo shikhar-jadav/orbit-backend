@@ -1580,9 +1580,11 @@ class ReActAgent:
                                     user_decision = await _await_action_approval(
                                         request_id, future, tool_id, active_interrupts, active_interrupt_owners
                                     )
-                                    is_approved, _ = policy_engine.parse_action_approval(user_decision, p_dec.risk_level)
+                                    is_approved, _, session_allow = policy_engine.parse_action_approval(
+                                        user_decision, p_dec.risk_level
+                                    )
                                     if is_approved:
-                                        if p_dec.risk_level != "critical":
+                                        if session_allow:
                                             approved_tools.add(tool_name.lower())
                                         chat_store.update_approval(
                                             request_id, status="approved", decision=user_decision, user_id=target_user_id
@@ -1648,9 +1650,11 @@ class ReActAgent:
                                     user_decision = await _await_action_approval(
                                         request_id, future, tool_id, active_interrupts, active_interrupt_owners
                                     )
-                                    is_approved, _ = policy_engine.parse_action_approval(user_decision, p_dec.risk_level)
+                                    is_approved, _, session_allow = policy_engine.parse_action_approval(
+                                        user_decision, p_dec.risk_level
+                                    )
                                     if is_approved:
-                                        if p_dec.risk_level != "critical":
+                                        if session_allow:
                                             approved_tools.add(tool_name.lower())
                                         chat_store.update_approval(
                                             request_id, status="approved", decision=user_decision, user_id=target_user_id
@@ -1739,7 +1743,7 @@ class ReActAgent:
                                 user_decision = await _await_action_approval(
                                     request_id, future, tool_id, active_interrupts, active_interrupt_owners
                                 )
-                                is_approved, always_allow = _parse_action_approval(
+                                is_approved, always_allow, session_allow = policy_engine.parse_action_approval(
                                     user_decision, p_dec.risk_level
                                 )
                                 if is_approved:
@@ -1753,7 +1757,7 @@ class ReActAgent:
                                             chat_store.update_personal_connector(
                                                 target_user_id, conn["id"], tool_permissions=permissions
                                             )
-                                    if p_dec.risk_level != "critical":
+                                    if session_allow:
                                         approved_tools.add(raw_mcp_name.lower())
                                         approved_tools.add(tool_name.lower())
                                     chat_store.update_approval(

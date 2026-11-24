@@ -176,15 +176,21 @@ def test_sensitive_values_are_redacted_from_approval_payloads():
     assert "customer@example.test" in rendered
 
 
-def test_approval_parser_fails_closed_and_never_remembers_critical_actions():
-    assert parse_action_approval({"action": "answer", "selected_titles": []}, "high") == (False, False)
-    assert parse_action_approval({"action": "decline"}, "high") == (False, False)
+def test_approval_parser_fails_closed_and_separates_once_session_and_persistent():
+    assert parse_action_approval({"action": "answer", "selected_titles": []}, "high") == (False, False, False)
+    assert parse_action_approval({"action": "decline"}, "high") == (False, False, False)
+    assert parse_action_approval(
+        {"action": "approve", "selected_titles": ["Allow once (Recommended)"]}, "high"
+    ) == (True, False, False)
+    assert parse_action_approval(
+        {"action": "approve", "selected_titles": ["Approve for this session"]}, "high"
+    ) == (True, False, True)
+    assert parse_action_approval(
+        {"action": "approve", "selected_titles": ["Always allow this tool"]}, "high"
+    ) == (True, True, False)
     assert parse_action_approval(
         {"action": "approve", "always_allow": True}, "critical"
-    ) == (True, False)
-    assert parse_action_approval(
-        {"action": "approve", "always_allow": True}, "high"
-    ) == (True, True)
+    ) == (True, False, False)
 
 
 def test_approval_update_is_owner_scoped_and_only_pending_can_resolve(postgres_database):

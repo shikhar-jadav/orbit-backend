@@ -187,8 +187,8 @@ def redact_sensitive_data(value: Any, key: str = "") -> Any:
 
 def parse_action_approval(
     user_decision: Dict[str, Any], risk_level: str
-) -> tuple[bool, bool]:
-    """Return (approved, always_allow); ambiguous answers fail closed."""
+) -> tuple[bool, bool, bool]:
+    """Return (approved, persistent_allow, session_allow); ambiguous answers fail closed."""
     action = str(user_decision.get("action") or "").strip().lower()
     titles = [
         str(item).strip().lower()
@@ -222,12 +222,24 @@ def parse_action_approval(
         )
     )
     if is_decline or not is_approve:
-        return False, False
-    always_allow = risk_level != "critical" and (
-        bool(user_decision.get("always_allow"))
-        or any("always allow" in title or "auto-approve" in title for title in titles)
+        return False, False, False
+
+    # Critical actions always need a new approval for every invocation.
+    if risk_level == "critical":
+        return True, False, False
+
+    persistent_allow = bool(user_decision.get("always_allow")) or any(
+        title.startswith("always allow this tool") or "auto-approve" in title
+        for title in titles
     )
-    return True, always_allow
+    session_allow = any(
+        title in {"approve for this session", "allow all script runs in this session"}
+        for title in titles
+    )
+    # A persistent allow setting takes precedence over an ephemeral session rule.
+    if persistent_allow:
+        session_allow = False
+    return True, persistent_allow, session_allow
 
 
 def evaluate_policy(
