@@ -2701,6 +2701,24 @@ class PostgresChatStore:
     # Trust Engine: Approvals & Immutable Audit Logging
     # --------------------------------------------------------------------------
 
+    def interrupt_pending_approvals(self) -> int:
+        """Fail closed on approvals whose live stream was lost during a restart."""
+        now = _utc_now()
+        decision_json = json.dumps(
+            {"reason": "Orbit restarted before this approval was completed. Retry the action from chat."},
+            ensure_ascii=False,
+        )
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE approvals
+                SET status = 'interrupted', decision_json = %s, resolved_at = %s
+                WHERE status = 'pending'
+                """,
+                (decision_json, now),
+            )
+        return int(cursor.rowcount or 0)
+
     def create_approval(
         self,
         approval_id: str,

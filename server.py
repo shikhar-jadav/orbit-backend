@@ -375,6 +375,15 @@ def _initialize_application_state() -> None:
         )
         gmail_mcp_server.configure_provider_integration_store(provider_integration_store)
         try:
+            interrupted_approvals = chat_store.interrupt_pending_approvals()
+            if interrupted_approvals:
+                print(
+                    f"[SECURITY] Marked {interrupted_approvals} pending approvals as interrupted after restart.",
+                    flush=True,
+                )
+        except Exception as approval_recovery_error:
+            print(f"[SECURITY] Could not reconcile pending approvals: {approval_recovery_error}", flush=True)
+        try:
             migrated = chat_store.migrate_legacy_connector_credentials()
             print(f"[SECURITY] Credential migration complete: {migrated}", flush=True)
         except Exception as migration_error:

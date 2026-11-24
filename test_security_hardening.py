@@ -212,3 +212,24 @@ def test_approval_update_is_owner_scoped_and_only_pending_can_resolve(postgres_d
     assert store.update_approval(
         "appr-owner-scope", status="rejected", user_id="owner-1"
     ) is None
+
+def test_pending_approvals_are_interrupted_after_server_restart(postgres_database):
+    store = PostgresChatStore(postgres_database)
+    approval_id = "appr-interrupted-after-restart"
+    store.create_approval(
+        approval_id=approval_id,
+        user_id="restart-user",
+        thread_id=None,
+        tool_name="send_email",
+        action_summary="Send an email",
+        risk_level="high",
+    )
+
+    assert store.interrupt_pending_approvals() == 1
+    approval = store.get_approval(approval_id)
+    assert approval["status"] == "interrupted"
+    assert "restarted" in approval["decision"]["reason"].lower()
+    assert store.update_approval(
+        approval_id, status="approved", user_id="restart-user"
+    ) is None
+
