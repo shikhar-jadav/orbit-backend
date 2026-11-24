@@ -35,7 +35,30 @@ GMAIL_MCP_CONNECTOR: Dict[str, Any] = {
     "configFields": [],
 }
 
-AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR]
+GITHUB_MCP_CONNECTOR: Dict[str, Any] = {
+    "id": "github-mcp",
+    "name": "GitHub",
+    "category": "Developer & Code",
+    "description": (
+        "Connect GitHub to browse repositories and code, manage issues and pull requests, "
+        "monitor GitHub Actions workflows, analyze security alerts, and power GitHub event triggers."
+    ),
+    "icon": "gitBranch",
+    "badge": "GitHub",
+    "authType": "OAuth 2.0",
+    "oauthProvider": "github",
+    "website": "https://github.com/github/github-mcp-server",
+    "capabilities": [
+        "Browse Repositories & Code",
+        "Manage Issues & Pull Requests",
+        "Monitor GitHub Actions & CI/CD",
+        "Code & Security Analysis",
+        "GitHub Event Triggers & Webhooks",
+    ],
+    "configFields": [],
+}
+
+AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR, GITHUB_MCP_CONNECTOR]
 
 
 def register_connector(connector: Dict[str, Any]) -> None:

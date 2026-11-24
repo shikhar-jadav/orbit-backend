@@ -488,3 +488,45 @@ def test_marketplace_status_handles_reconnect_required_without_crashing():
     assert gmail_conn["reconnect_required"] is True
     assert gmail_conn["status"] == "needs_auth"
     assert "reconnected" in (gmail_conn["reconnect_message"] or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_github_mcp_connector_discovery_and_catalog():
+    import github_mcp_client
+    from marketplace import AVAILABLE_CONNECTORS, list_connectors_with_status
+    from proactive_integrations import ProviderIntegrationStore
+
+    gh_def = next((c for c in AVAILABLE_CONNECTORS if c["id"] == "github-mcp"), None)
+    assert gh_def is not None
+    assert gh_def["oauthProvider"] == "github"
+
+    db = _InMemoryDatabase()
+    store = ProviderIntegrationStore(db, encryption_key=generate_encryption_key())
+    store.save_account(
+        user_id="user-gh-mcp",
+        provider="github",
+        provider_account_id="999",
+        account_name="octocat",
+        access_token="gho_mcp_token",
+    )
+
+    fake_chat_store = MagicMock()
+    fake_chat_store.get_settings_by_prefix.return_value = {"connector_github-mcp_enabled": "1"}
+    connectors = list_connectors_with_status(
+        fake_chat_store, user_id="user-gh-mcp", provider_integration_store=store
+    )
+    gh_status = next(c for c in connectors if c["id"] == "github-mcp")
+    assert gh_status["is_authenticated"] is True
+    assert gh_status["status"] == "active"
+
+    github_mcp_client.configure_provider_integration_store(store)
+    github_mcp_client.clear_github_tools_cache()
+    sample_tools = [{"name": "get_file_contents", "description": "Read repo file", "inputSchema": {"type": "object"}}]
+    with patch("mcp_client.connect_and_list_mcp_tools", new=AsyncMock(return_value=sample_tools)) as mock_list:
+        loaded = await github_mcp_client.load_github_mcp_connector("user-gh-mcp")
+
+    assert loaded is not None
+    assert loaded["mcp_url"] == "https://api.githubcopilot.com/mcp/"
+    assert loaded["headers"] == [{"key": "Authorization", "value": "Bearer gho_mcp_token"}]
+    assert loaded["tools"] == sample_tools
+    mock_list.assert_awaited_once()
