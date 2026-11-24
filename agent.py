@@ -1076,11 +1076,18 @@ class ReActAgent:
 
                 try:
                     import marketplace
+                    import github_mcp_client
+                    pis = getattr(github_mcp_client, "_PROVIDER_INTEGRATION_STORE", None)
                     mp_connectors = await asyncio.to_thread(
-                        marketplace.list_connectors_with_status, chat_store, user_id=target_user_id
+                        marketplace.list_connectors_with_status,
+                        chat_store,
+                        user_id=target_user_id,
+                        provider_integration_store=pis,
                     )
                     for mp_c in mp_connectors:
                         if not mp_c.get("is_enabled"):
+                            continue
+                        if mp_c.get("oauthProvider") and not mp_c.get("is_authenticated"):
                             continue
                         if mp_c.get("id") == "gmail-mcp":
                             if any(c.get("name", "").lower() == "gmail" or "gmail" in c.get("mcp_url", "").lower() for c in connectors):
@@ -1419,14 +1426,12 @@ class ReActAgent:
                         scored_tools.sort(key=lambda x: x[0], reverse=True)
                         matched = [t for _, t in scored_tools[:max(1, limit)]]
 
-                        if not matched and all_catalog_tools:
+                        if not matched and all_catalog_tools and query_words:
                             for b_name, t_entry in all_catalog_tools.items():
                                 if any(w in t_entry["connector_name"].lower() for w in query_words):
                                     matched.append(t_entry)
                                     if len(matched) >= limit:
                                         break
-                            if not matched:
-                                matched = list(all_catalog_tools.values())[:max(1, limit)]
 
                         # Dynamically activate matched tools for subsequent turns!
                         for t in matched:
@@ -1444,14 +1449,26 @@ class ReActAgent:
                         for t in matched:
                             by_conn.setdefault(t["connector_name"], []).append(t)
 
-                        lines = [f"Loaded {len(matched)} tools:\n", "Matched tools:"]
-                        for c_name, c_tools in by_conn.items():
-                            lines.append(f"  {c_name} ({len(c_tools)}):")
-                            for ct in c_tools:
-                                s_desc = ct["description"][:80].strip()
-                                lines.append(f"    - {ct['raw_name']}: {s_desc}")
+                        if not matched:
+                            available_conns = sorted({t["connector_name"] for t in all_catalog_tools.values()})
+                            conn_hint = (
+                                f" Connected integrations: {', '.join(available_conns)}."
+                                if available_conns
+                                else " No external MCP integrations are currently connected."
+                            )
+                            tool_result = (
+                                f"No connected MCP tools matched '{query}'.{conn_hint} "
+                                "Ask the user to connect the required integration in Marketplace or Settings > Connected Accounts."
+                            )
+                        else:
+                            lines = [f"Loaded {len(matched)} tools:\n", "Matched tools:"]
+                            for c_name, c_tools in by_conn.items():
+                                lines.append(f"  {c_name} ({len(c_tools)}):")
+                                for ct in c_tools:
+                                    s_desc = ct["description"][:80].strip()
+                                    lines.append(f"    - {ct['raw_name']}: {s_desc}")
 
-                        tool_result = "\n".join(lines)
+                            tool_result = "\n".join(lines)
                     elif tool_func:
                         if tool_name == "ask_question" and active_interrupts is not None:
                             raw_qs = []
