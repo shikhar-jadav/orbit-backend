@@ -283,7 +283,11 @@ class ProviderIntegrationStore:
             "secret": secret,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
-        encrypted_hook = {**hook, "secret": self._encrypt(secret)}
+        encrypted_hook = {
+            **hook,
+            "token": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            "secret": self._encrypt(secret),
+        }
         with self._lock, self._connection() as conn:
             conn.execute(
                 """
@@ -296,9 +300,14 @@ class ProviderIntegrationStore:
         return hook
 
     def get_github_hook(self, token: str) -> Optional[dict[str, Any]]:
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT * FROM proactive_github_hooks WHERE token = %s", (token,)
+                """
+                SELECT * FROM proactive_github_hooks
+                WHERE token = %s OR token = %s
+                """,
+                (token_hash, token),
             ).fetchone()
         if not row:
             return None
@@ -311,14 +320,20 @@ class ProviderIntegrationStore:
             rows = conn.execute(
                 "SELECT * FROM proactive_github_hooks WHERE routine_id = %s", (routine_id,)
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {key: value for key, value in dict(row).items() if key not in {"token", "secret"}}
+            for row in rows
+        ]
 
     def list_github_hooks_for_user(self, user_id: str) -> list[dict[str, Any]]:
         with self._connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM proactive_github_hooks WHERE user_id = %s", (user_id,)
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {key: value for key, value in dict(row).items() if key not in {"token", "secret"}}
+            for row in rows
+        ]
 
     def delete_github_hook_record(self, hook_id: str) -> bool:
         with self._lock, self._connection() as conn:
@@ -331,7 +346,27 @@ class ProviderIntegrationStore:
                 "SELECT * FROM proactive_github_hooks WHERE routine_id = %s", (routine_id,)
             ).fetchall()
             conn.execute("DELETE FROM proactive_github_hooks WHERE routine_id = %s", (routine_id,))
-        return [dict(row) for row in rows]
+        return [
+            {key: value for key, value in dict(row).items() if key not in {"token", "secret"}}
+            for row in rows
+        ]
+
+    def migrate_github_hook_tokens(self) -> int:
+        """Hash legacy raw GitHub webhook callback tokens at rest."""
+        migrated = 0
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                "SELECT id, token FROM proactive_github_hooks"
+            ).fetchall()
+            for row in rows:
+                token = str(row["token"] or "")
+                if token and not re.fullmatch(r"[0-9a-f]{64}", token):
+                    conn.execute(
+                        "UPDATE proactive_github_hooks SET token = %s WHERE id = %s",
+                        (hashlib.sha256(token.encode("utf-8")).hexdigest(), row["id"]),
+                    )
+                    migrated += 1
+        return migrated
 
 
 def verify_github_signature(secret: str, body: bytes, signature: Optional[str]) -> bool:

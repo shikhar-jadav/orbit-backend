@@ -394,6 +394,15 @@ def _initialize_application_state() -> None:
             print(f"[SECURITY] Webhook credential migration complete: {webhook_migrated}", flush=True)
         except Exception as migration_error:
             print(f"[SECURITY] Webhook credential migration incomplete: {migration_error}", flush=True)
+        try:
+            github_hook_tokens_migrated = provider_integration_store.migrate_github_hook_tokens()
+            if github_hook_tokens_migrated:
+                print(
+                    f"[SECURITY] Hashed {github_hook_tokens_migrated} legacy GitHub webhook callback tokens.",
+                    flush=True,
+                )
+        except Exception as migration_error:
+            print(f"[SECURITY] GitHub webhook token migration incomplete: {migration_error}", flush=True)
         proactive_engine = ProactiveEngine(
             store=proactive_store,
             agent=agent,

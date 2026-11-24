@@ -233,3 +233,63 @@ def test_pending_approvals_are_interrupted_after_server_restart(postgres_databas
         approval_id, status="approved", user_id="restart-user"
     ) is None
 
+def test_github_webhook_callback_tokens_are_hashed_and_not_listed(postgres_database):
+    from cryptography.fernet import Fernet
+    from proactive_integrations import ProviderIntegrationStore
+
+    key = Fernet.generate_key().decode("ascii")
+    store = ProviderIntegrationStore(postgres_database, encryption_key=key)
+    callback_token = "private-github-callback-token"
+    signing_secret = "private-github-signing-secret"
+
+    store.create_github_hook(
+        token=callback_token,
+        user_id="github-hook-owner",
+        repository="owner/repository",
+        routine_id="routine-1",
+        hook_id=42,
+        secret=signing_secret,
+    )
+
+    with postgres_database.connection() as connection:
+        stored = connection.execute(
+            "SELECT token, secret FROM proactive_github_hooks WHERE hook_id = 42"
+        ).fetchone()
+    assert stored["token"] != callback_token
+    assert callback_token not in stored["token"]
+    assert signing_secret not in stored["secret"]
+
+    hook = store.get_github_hook(callback_token)
+    assert hook["secret"] == signing_secret
+    assert hook["hook_id"] == 42
+
+    listed = store.list_github_hooks_for_user("github-hook-owner")
+    assert listed and "token" not in listed[0] and "secret" not in listed[0]
+
+
+def test_legacy_github_callback_tokens_are_hashed(postgres_database):
+    from cryptography.fernet import Fernet
+    from proactive_integrations import ProviderIntegrationStore
+
+    store = ProviderIntegrationStore(
+        postgres_database, encryption_key=Fernet.generate_key().decode("ascii")
+    )
+    store.create_github_hook(
+        token="temporary-callback-token",
+        user_id="legacy-github-owner",
+        repository="owner/repository",
+        routine_id="routine-legacy",
+        hook_id=43,
+        secret="legacy-signing-secret",
+    )
+    with postgres_database.connection() as connection:
+        row = connection.execute(
+            "SELECT id FROM proactive_github_hooks WHERE hook_id = 43"
+        ).fetchone()
+        connection.execute(
+            "UPDATE proactive_github_hooks SET token = %s WHERE id = %s",
+            ("legacy-raw-callback-token", row["id"]),
+        )
+
+    assert store.migrate_github_hook_tokens() == 1
+    assert store.get_github_hook("legacy-raw-callback-token")["hook_id"] == 43
