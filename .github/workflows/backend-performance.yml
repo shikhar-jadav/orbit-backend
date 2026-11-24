@@ -32,13 +32,15 @@ jobs:
             "psycopg[binary,pool]>=3.2" \
             "qdrant-client>=1.9.0" \
             "langgraph>=0.2.0" \
-            "langgraph-checkpoint-postgres>=2.0.0"
+            "langgraph-checkpoint-postgres>=2.0.0" \
+            "cryptography>=42.0.0"
 
       - name: Compile changed backend modules
         run: |
           python -m py_compile \
             server.py agent.py memory_store.py mcp_client.py \
-            qdrant_vector.py chat_store.py
+            qdrant_vector.py chat_store.py credential_vault.py \
+            policy_engine.py proactive_engine.py
 
       - name: Run focused performance and session tests
-        run: python -m pytest -q test_backend_performance.py
+        run: python -m pytest -q -rs test_backend_performance.py test_rotation.py test_security_hardening.py
