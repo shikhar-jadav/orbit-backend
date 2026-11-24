@@ -11,7 +11,23 @@ permissions:
 jobs:
   backend-checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      TEST_DATABASE_URL: postgresql://orbit:orbit_test_password@localhost:5432/orbit_test
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: orbit
+          POSTGRES_PASSWORD: orbit_test_password
+          POSTGRES_DB: orbit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U orbit -d orbit_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -22,25 +38,23 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install focused backend test dependencies
+      - name: Install backend test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install \
-            "pytest>=8" \
-            "httpx>=0.27.0" \
-            "python-dotenv>=1.0.0" \
-            "psycopg[binary,pool]>=3.2" \
-            "qdrant-client>=1.9.0" \
-            "langgraph>=0.2.0" \
-            "langgraph-checkpoint-postgres>=2.0.0" \
-            "cryptography>=42.0.0"
+          python -m pip install -r requirements.txt "pytest>=8"
 
       - name: Compile changed backend modules
         run: |
           python -m py_compile \
             server.py agent.py memory_store.py mcp_client.py \
             qdrant_vector.py chat_store.py credential_vault.py \
-            policy_engine.py proactive_engine.py
+            policy_engine.py proactive_engine.py proactive_integrations.py
 
-      - name: Run focused performance and session tests
-        run: python -m pytest -q -rs test_backend_performance.py test_security_hardening.py
+      - name: Run approval, vault, integration and performance tests
+        run: |
+          python -m pytest -q -rs \
+            test_backend_performance.py \
+            test_security_hardening.py \
+            test_proactive_integrations.py \
+            test_proactive_api.py \
+            test_rotation.py
