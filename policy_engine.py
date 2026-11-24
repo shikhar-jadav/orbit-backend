@@ -77,6 +77,15 @@ def classify_action_risk(
                 f"{'List' if action == 'list' else 'Read'} workspace files",
             )
 
+    if clean_name == "manage_memory" and isinstance(tool_args, dict):
+        action = str(tool_args.get("action", "")).lower()
+        if action == "delete":
+            return (
+                "critical",
+                "Fresh approval required: Permanently delete stored memory.",
+                "Delete a saved memory, rule, or episode",
+            )
+
     # 1. Critical actions (payments, drops, permanent deletes)
     for pat in CRITICAL_PATTERNS:
         if pat.search(clean_name):
@@ -144,6 +153,37 @@ def classify_action_risk(
     )
 
 
+def redact_sensitive_data(value: Any, key: str = "") -> Any:
+    """Return a safe copy of tool arguments for approval cards and audit records."""
+    secret_key = re.compile(
+        r"(?:secret|token|password|passwd|api[_-]?key|access[_-]?key|"
+        r"private[_-]?key|credential|authorization)",
+        re.IGNORECASE,
+    )
+    if secret_key.search(key):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {
+            str(k): (
+                "[REDACTED]"
+                if str(k).lower() in {"headers", "request_headers", "authorization_headers"}
+                else redact_sensitive_data(v, str(k))
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_sensitive_data(item, key) for item in value]
+    if isinstance(value, tuple):
+        return [redact_sensitive_data(item, key) for item in value]
+    if isinstance(value, str):
+        return re.sub(
+            r"(?i)(bearer\\s+)[A-Za-z0-9._~+/=-]+",
+            r"\\1[REDACTED]",
+            value,
+        )
+    return value
+
+
 def evaluate_policy(
     tool_name: str,
     tool_args: Any,
@@ -151,16 +191,12 @@ def evaluate_policy(
     approved_tools: Optional[Set[str]] = None,
     user_policy: Optional[Dict[str, Any]] = None,
 ) -> PolicyDecision:
-    """
-    Evaluates policy for a proposed tool action.
-    Returns PolicyDecision indicating if an approval interrupt is needed.
-    """
+    """Evaluate an action before execution. Critical actions always need fresh approval."""
     approved_tools = approved_tools or set()
     user_policy = user_policy or {}
     conn_name = connector_info.get("name", "Workspace") if connector_info else "Workspace"
     conn_id = connector_info.get("id") if connector_info else None
 
-    # Check connector-specific permission if defined
     tool_perms = (connector_info.get("tool_permissions") or {}) if connector_info else {}
     raw_mcp_name = (connector_info.get("raw_name") if connector_info else None) or tool_name
     configured_perm = (
@@ -169,47 +205,72 @@ def evaluate_policy(
         or tool_perms.get(tool_name)
         or tool_perms.get(tool_name.lower())
     )
-
     clean_name = tool_name.lower()
     raw_clean = raw_mcp_name.lower()
+    risk_level, policy_rule, action_summary = classify_action_risk(
+        raw_mcp_name, tool_args, connector_info
+    )
+    safe_details = {
+        "tool_name": raw_mcp_name,
+        "connector_name": conn_name,
+        "connector_id": conn_id,
+        "risk_level": risk_level,
+        "args": redact_sensitive_data(tool_args if isinstance(tool_args, dict) else {}),
+    }
 
-    # 1. Explicitly blocked by user settings
     if configured_perm == "block":
         return PolicyDecision(
             requires_approval=False,
-            risk_level="high",
+            risk_level=risk_level,
             policy_rule="Blocked by user settings.",
             action_summary=f"Action '{raw_mcp_name}' is blocked by connector permissions.",
             reason="This tool has been disabled or blocked in Settings.",
+            details=safe_details,
             blocked=True,
         )
 
-    # 2. Check if explicitly pre-approved in this session
+    # Payments, credential changes and destructive actions can never be bypassed by
+    # session approval or an "allow always" connector setting.
+    if risk_level == "critical":
+        return PolicyDecision(
+            requires_approval=True,
+            risk_level=risk_level,
+            policy_rule="Fresh explicit approval required for every critical action.",
+            action_summary=action_summary,
+            reason="This action is consequential and must be approved immediately before execution.",
+            details=safe_details,
+            options=[
+                {
+                    "title": "Approve once (Recommended)",
+                    "description": f"Authorize this single action on {conn_name}.",
+                },
+                {
+                    "title": "Decline action",
+                    "description": "Reject this action and ask Orbit to find a safer alternative.",
+                },
+            ],
+        )
+
     if clean_name in approved_tools or raw_clean in approved_tools:
-        risk_level, rule, summary = classify_action_risk(raw_mcp_name, tool_args, connector_info)
         return PolicyDecision(
             requires_approval=False,
             risk_level=risk_level,
-            policy_rule=f"{rule} (Pre-approved in active session)",
-            action_summary=summary,
+            policy_rule=f"{policy_rule} (Pre-approved in active session)",
+            action_summary=action_summary,
             reason="User has already granted permission for this action during this session.",
+            details=safe_details,
         )
 
-    # 3. Check if connector explicitly set to "allow"
     if configured_perm == "allow":
-        risk_level, rule, summary = classify_action_risk(raw_mcp_name, tool_args, connector_info)
         return PolicyDecision(
             requires_approval=False,
             risk_level=risk_level,
-            policy_rule=f"{rule} (Always allowed in Settings)",
-            action_summary=summary,
+            policy_rule=f"{policy_rule} (Always allowed in Settings)",
+            action_summary=action_summary,
             reason=f"Configured as 'Allow always' on connector '{conn_name}'.",
+            details=safe_details,
         )
 
-    # 4. Standard action classification
-    risk_level, policy_rule, action_summary = classify_action_risk(raw_mcp_name, tool_args, connector_info)
-
-    # Low risk actions are auto-allowed unless explicitly set to 'approval'
     if risk_level == "low" and configured_perm != "approval":
         return PolicyDecision(
             requires_approval=False,
@@ -217,9 +278,9 @@ def evaluate_policy(
             policy_rule=policy_rule,
             action_summary=action_summary,
             reason="Read-only or safe internal operation.",
+            details=safe_details,
         )
 
-    # 5. Medium workspace file writes: allow in sandbox unless user policy requires approval
     if clean_name in ("workspace_files", "create_file", "write_workspace_file", "edit_workspace_file"):
         require_file_approval = bool(user_policy.get("require_file_approval", False))
         if not require_file_approval:
@@ -229,42 +290,10 @@ def evaluate_policy(
                 policy_rule=policy_rule,
                 action_summary=action_summary,
                 reason="Workspace sandbox write permitted by default.",
+                details=safe_details,
             )
 
-    # 6. Action requires approval! Build contextual options
-    options: List[Dict[str, str]] = []
-
-    if risk_level == "critical":
-        options = [
-            {
-                "title": "Approve action (Proceed with execution)",
-                "description": f"Authorize {conn_name} to perform this consequential action now.",
-            },
-            {
-                "title": "Always allow for this session",
-                "description": "Approve now and don't ask again during this conversation.",
-            },
-            {
-                "title": "Decline action",
-                "description": "Reject this action and ask the agent to explore an alternative.",
-            },
-        ]
-    elif "run_workspace_code" in clean_name:
-        options = [
-            {
-                "title": "Allow execution (Recommended)",
-                "description": "Run this Python script inside the workspace sandbox.",
-            },
-            {
-                "title": "Allow all script runs in this session",
-                "description": "Approve running workspace code for the rest of this session.",
-            },
-            {
-                "title": "Decline execution",
-                "description": "Do not run the script; ask the agent to show the code instead.",
-            },
-        ]
-    elif connector_info:
+    if connector_info:
         options = [
             {
                 "title": "Allow once (Recommended)",
@@ -276,7 +305,18 @@ def evaluate_policy(
             },
             {
                 "title": "Decline action",
-                "description": f"Reject this tool call and let Orbit adapt.",
+                "description": "Reject this tool call and let Orbit adapt.",
+            },
+        ]
+    elif "run_workspace_code" in clean_name:
+        options = [
+            {
+                "title": "Allow execution (Recommended)",
+                "description": "Run this script inside the workspace sandbox once.",
+            },
+            {
+                "title": "Decline execution",
+                "description": "Do not run the script; ask Orbit to show the code instead.",
             },
         ]
     else:
@@ -301,12 +341,6 @@ def evaluate_policy(
         policy_rule=policy_rule,
         action_summary=action_summary,
         reason=f"Action requires review under policy '{policy_rule}'.",
-        details={
-            "tool_name": raw_mcp_name,
-            "connector_name": conn_name,
-            "connector_id": conn_id,
-            "risk_level": risk_level,
-            "args": tool_args if isinstance(tool_args, dict) else {},
-        },
+        details=safe_details,
         options=options,
     )

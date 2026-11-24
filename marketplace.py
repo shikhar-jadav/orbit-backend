@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from credential_vault import CredentialVault
+
 BASE_DIR = Path(__file__).resolve().parent
 SKILLS_DIR = BASE_DIR / ".agents" / "skills"
 SKILLS_LOCK_PATH = BASE_DIR / "skills-lock.json"
@@ -169,9 +171,7 @@ def get_skill_readme_content(skill_id: str) -> Optional[str]:
 # Connectors Status & Persistence
 # ------------------------------------------------------------------------------
 def _mask_secret(value: str) -> str:
-    if not value or len(value) <= 6:
-        return "••••••"
-    return f"{value[:3]}••••••{value[-3:]}"
+    return "••••••" if value else ""
 
 
 def list_connectors_with_status(
@@ -193,6 +193,13 @@ def list_connectors_with_status(
             config_dict = json.loads(raw_config) if raw_config else {}
         except Exception:
             config_dict = {}
+
+        vault = CredentialVault()
+        for field in conn.get("configFields", []):
+            if field.get("type") == "password":
+                key = field.get("key")
+                if key and config_dict.get(key):
+                    config_dict[key] = vault.decrypt_text(str(config_dict[key]))
 
         # Check required fields
         required_keys = [f["key"] for f in conn.get("configFields", []) if f.get("required")]
@@ -268,12 +275,25 @@ def save_connector_configuration(
     except Exception:
         existing_config = {}
 
+    vault = CredentialVault()
     merged_config = dict(existing_config)
+    for field in target.get("configFields", []):
+        if field.get("type") == "password":
+            key = field.get("key")
+            if key and existing_config.get(key):
+                merged_config[key] = vault.decrypt_text(str(existing_config[key]))
+
     for k, v in config.items():
         if isinstance(v, str) and "••••" in v:
             continue
         if v is not None:
             merged_config[k] = v
+
+    for field in target.get("configFields", []):
+        if field.get("type") == "password":
+            key = field.get("key")
+            if key and merged_config.get(key):
+                merged_config[key] = vault.encrypt_text(str(merged_config[key]))
 
     chat_store.set_setting(config_key, json.dumps(merged_config, ensure_ascii=False), user_id=user_id)
     chat_store.set_setting(enabled_key, "1" if enabled else "0", user_id=user_id)

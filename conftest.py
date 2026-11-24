@@ -1,6 +1,16 @@
 import pytest
+from cryptography.fernet import Fernet
 
 from test_database import IsolatedPostgresDatabase
+
+
+@pytest.fixture(autouse=True)
+def test_credential_encryption_key(monkeypatch):
+    # Tests use an isolated key. Production keys are supplied by the deployment
+    # environment and are never generated automatically by the application.
+    key = Fernet.generate_key().decode("ascii")
+    monkeypatch.setenv("ORBIT_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("INTEGRATION_TOKEN_ENCRYPTION_KEY", key)
 
 
 class MemoryObjectStorage:

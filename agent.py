@@ -28,6 +28,130 @@ import policy_engine
 
 
 
+def _start_action_approval(
+    *,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    tool_id: str,
+    decision: Any,
+    target_user_id: Optional[str],
+    chat_store: Optional[Any],
+    active_interrupts: Optional[Dict[str, Any]],
+    active_interrupt_owners: Optional[Dict[str, str]],
+    connector_id: Optional[str] = None,
+    connector_name: Optional[str] = None,
+) -> Optional[tuple[str, asyncio.Future, list[dict[str, Any]]]]:
+    """Create a durable, owner-bound approval and return the events to stream."""
+    if not target_user_id or chat_store is None or active_interrupts is None or active_interrupt_owners is None:
+        return None
+    request_id = f"appr-{uuid4().hex}"
+    future = asyncio.get_running_loop().create_future()
+    try:
+        chat_store.create_approval(
+            approval_id=request_id,
+            user_id=target_user_id,
+            thread_id=None,
+            tool_name=tool_name,
+            connector_id=connector_id,
+            action_summary=decision.action_summary,
+            risk_level=decision.risk_level,
+            details=decision.details,
+        )
+    except Exception as exc:
+        print(f"[agent] Approval persistence failed; blocking action: {exc}")
+        return None
+
+    active_interrupts[request_id] = future
+    active_interrupts[tool_id] = future
+    active_interrupt_owners[request_id] = target_user_id
+    safe_args = policy_engine.redact_sensitive_data(tool_args)
+    question = {
+        "question": f"Approve action: {decision.action_summary}",
+        "options": decision.options,
+        "is_multi_select": False,
+    }
+    payload = {
+        "interrupt_id": request_id,
+        "request_id": request_id,
+        "is_approval": True,
+        "risk_level": decision.risk_level,
+        "policy_rule": decision.policy_rule,
+        "action_summary": decision.action_summary,
+        "reason": decision.reason,
+        "details": decision.details,
+        "connector_id": connector_id,
+        "connector_name": connector_name,
+        "tool_name": tool_name,
+        "args": safe_args,
+        "questions": [question],
+        "tool_call_id": tool_id,
+    }
+    return request_id, future, [
+        {"type": "interrupt", "data": payload},
+        {"type": "ask_question", "data": payload},
+    ]
+
+
+async def _await_action_approval(
+    request_id: str,
+    future: asyncio.Future,
+    tool_id: str,
+    active_interrupts: Dict[str, Any],
+    active_interrupt_owners: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
+    try:
+        return await asyncio.wait_for(asyncio.shield(future), timeout=300.0)
+    except asyncio.TimeoutError:
+        return {"action": "decline", "reason": "Approval timed out after 5 minutes."}
+    except Exception as exc:
+        return {"action": "decline", "reason": str(exc)}
+    finally:
+        active_interrupts.pop(request_id, None)
+        active_interrupts.pop(tool_id, None)
+        if active_interrupt_owners is not None:
+            active_interrupt_owners.pop(request_id, None)
+
+
+def _parse_action_approval(
+    user_decision: Dict[str, Any], risk_level: str
+) -> tuple[bool, bool]:
+    """Return (approved, always_allow); ambiguous answers fail closed."""
+    action = str(user_decision.get("action") or "").strip().lower()
+    titles = [
+        str(item).strip().lower()
+        for item in (user_decision.get("selected_titles") or [])
+    ]
+    decline_words = ("decline", "reject", "block", "deny", "cancel", "skip")
+    is_decline = action in {"decline", "reject", "block", "deny", "cancel", "skip"}
+    is_decline = is_decline or any(
+        any(word in title for word in decline_words) for title in titles
+    )
+    approved_actions = {"approve", "allow", "yes", "proceed", "once", "continue"}
+    approved_titles = {
+        "allow once (recommended)",
+        "approve action (recommended)",
+        "approve action (proceed with execution)",
+        "allow execution (recommended)",
+        "approve for this session",
+        "allow all script runs in this session",
+    }
+    is_approve = action in approved_actions or any(
+        title in approved_titles
+        or title.startswith("allow once")
+        or title.startswith("approve action")
+        or title.startswith("allow execution")
+        or title.startswith("always allow")
+        for title in titles
+    )
+    if is_decline or not is_approve:
+        return False, False
+    always_allow = risk_level != "critical" and (
+        bool(user_decision.get("always_allow"))
+        or any("always allow" in title or "auto-approve" in title for title in titles)
+    )
+    return True, always_allow
+
+
 def _collapse_exact_repeated_response(text: str) -> str:
     """Remove a response block repeated verbatim by successive agent turns."""
     value = (text or "").strip()
@@ -802,6 +926,7 @@ class ReActAgent:
         target_user_id: Optional[str] = None,
         chat_store: Optional[Any] = None,
         active_interrupts: Optional[Dict[str, Any]] = None,
+        active_interrupt_owners: Optional[Dict[str, str]] = None,
         force_approval: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
@@ -1034,7 +1159,8 @@ class ReActAgent:
                             or perms.get(raw_name.replace("_", "-"))
                         )
                         if perm is None:
-                            perm = "allow" if is_read_only else "approval"
+                            inferred_risk, _, _ = policy_engine.classify_action_risk(raw_name, {})
+                            perm = "allow" if is_read_only and inferred_risk == "low" else "approval"
 
                         if raw_name.lower() in approved_tools:
                             perm = "allow"
@@ -1404,10 +1530,12 @@ class ReActAgent:
                                         "can_skip": q_item.get("can_skip", True),
                                     })
 
-                            request_id = f"q-{uuid4().hex[:8]}"
+                            request_id = f"q-{uuid4().hex}"
                             loop = asyncio.get_running_loop()
                             fut = loop.create_future()
                             active_interrupts[request_id] = fut
+                            if active_interrupt_owners is not None and target_user_id:
+                                active_interrupt_owners[request_id] = target_user_id
                             active_interrupts[tool_id] = fut
 
                             yield {
@@ -1437,6 +1565,8 @@ class ReActAgent:
                                 user_decision = {"action": "error", "text": str(exc)}
                             finally:
                                 active_interrupts.pop(request_id, None)
+                                if active_interrupt_owners is not None:
+                                    active_interrupt_owners.pop(request_id, None)
                                 active_interrupts.pop(tool_id, None)
 
                             resumed_from_interrupt = True
@@ -1467,189 +1597,139 @@ class ReActAgent:
                                 tool_args=tool_args,
                                 approved_tools=approved_tools,
                             )
-                            if (p_dec.requires_approval or force_approval) and active_interrupts is not None:
-                                request_id = f"appr-{uuid4().hex[:8]}"
-                                loop = asyncio.get_running_loop()
-                                fut = loop.create_future()
-                                active_interrupts[request_id] = fut
-                                active_interrupts[tool_id] = fut
-
-                                if chat_store:
-                                    try:
-                                        chat_store.create_approval(
-                                            approval_id=request_id,
-                                            user_id=target_user_id,
-                                            thread_id=None,
-                                            tool_name=tool_name,
-                                            connector_id=None,
-                                            action_summary=p_dec.action_summary,
-                                            risk_level=p_dec.risk_level,
-                                            details=p_dec.details,
-                                        )
-                                    except Exception as ce:
-                                        print(f"[agent] Could not create approval record: {ce}")
-
-                                approval_question = {
-                                    "question": f"Approval required: {p_dec.action_summary}",
-                                    "options": p_dec.options,
-                                    "is_multi_select": False,
-                                }
-                                yield {
-                                    "type": "interrupt",
-                                    "data": {
-                                        "interrupt_id": request_id,
-                                        "request_id": request_id,
-                                        "is_approval": True,
-                                        "risk_level": p_dec.risk_level,
-                                        "policy_rule": p_dec.policy_rule,
-                                        "action_summary": p_dec.action_summary,
-                                        "reason": p_dec.reason,
-                                        "details": p_dec.details,
-                                        "tool_name": tool_name,
-                                        "args": tool_args,
-                                        "questions": [approval_question],
-                                        "tool_call_id": tool_id,
-                                    },
-                                }
-                                yield {
-                                    "type": "ask_question",
-                                    "data": {
-                                        "interrupt_id": request_id,
-                                        "request_id": request_id,
-                                        "is_approval": True,
-                                        "risk_level": p_dec.risk_level,
-                                        "policy_rule": p_dec.policy_rule,
-                                        "action_summary": p_dec.action_summary,
-                                        "reason": p_dec.reason,
-                                        "details": p_dec.details,
-                                        "tool_name": tool_name,
-                                        "args": tool_args,
-                                        "questions": [approval_question],
-                                        "tool_call_id": tool_id,
-                                    },
-                                }
-
-                                try:
-                                    user_decision = await asyncio.wait_for(asyncio.shield(fut), timeout=300.0)
-                                except asyncio.TimeoutError:
-                                    user_decision = {"action": "decline", "reason": "Approval timed out after 5 minutes."}
-                                except Exception as exc:
-                                    user_decision = {"action": "decline", "reason": str(exc)}
-                                finally:
-                                    active_interrupts.pop(request_id, None)
-                                    active_interrupts.pop(tool_id, None)
-
-                                resumed_from_interrupt = True
-                                action = str(user_decision.get("action", "")).lower()
-                                selected_titles = [str(t).lower() for t in (user_decision.get("selected_titles") or [])]
-                                is_decline = (
-                                    action in ("decline", "reject", "block", "deny", "cancel", "skip")
-                                    or any(w in action for w in ("decline", "reject", "block", "deny", "cancel"))
-                                    or any(w in t for t in selected_titles for w in ("decline", "reject", "block", "deny", "cancel"))
+                            if p_dec.blocked:
+                                tool_result = f"Action blocked: {p_dec.reason}"
+                            elif p_dec.requires_approval or force_approval:
+                                approval = _start_action_approval(
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    tool_id=tool_id,
+                                    decision=p_dec,
+                                    target_user_id=target_user_id,
+                                    chat_store=chat_store,
+                                    active_interrupts=active_interrupts,
+                                    active_interrupt_owners=active_interrupt_owners,
                                 )
-
-                                if is_decline:
-                                    if chat_store:
-                                        try:
-                                            chat_store.update_approval(request_id, status="rejected", decision=user_decision)
-                                            chat_store.record_audit_log(
-                                                user_id=target_user_id,
-                                                thread_id=None,
-                                                tool_name=tool_name,
-                                                action_name=p_dec.action_summary,
-                                                policy_evaluated=p_dec.policy_rule,
-                                                risk_level=p_dec.risk_level,
-                                                status="rejected",
-                                                actor="user",
-                                                input_payload=tool_args,
-                                                output_payload={"status": "Declined by user."},
-                                            )
-                                        except Exception as ae:
-                                            print(f"[agent] Error recording audit log: {ae}")
-                                    tool_result = f"Action declined by user: {p_dec.action_summary}."
+                                if approval is None:
+                                    tool_result = "Blocked: explicit approval is required, but a secure approval session is unavailable. Retry from the Orbit chat."
                                 else:
-                                    approved_tools.add(tool_name.lower())
-                                    if chat_store:
+                                    request_id, future, approval_events = approval
+                                    for approval_event in approval_events:
+                                        yield approval_event
+                                    user_decision = await _await_action_approval(
+                                        request_id, future, tool_id, active_interrupts, active_interrupt_owners
+                                    )
+                                    is_approved, _ = _parse_action_approval(user_decision, p_dec.risk_level)
+                                    if is_approved:
+                                        if p_dec.risk_level != "critical":
+                                            approved_tools.add(tool_name.lower())
+                                        chat_store.update_approval(
+                                            request_id, status="approved", decision=user_decision, user_id=target_user_id
+                                        )
                                         try:
-                                            chat_store.update_approval(request_id, status="approved", decision=user_decision)
-                                        except Exception as ae:
-                                            print(f"[agent] Error updating approval: {ae}")
-                                    try:
-                                        tool_result = await asyncio.to_thread(tool_func.invoke, tool_args)
-                                        if chat_store:
+                                            tool_result = await asyncio.to_thread(tool_func.invoke, tool_args)
                                             chat_store.record_audit_log(
-                                                user_id=target_user_id,
-                                                thread_id=None,
-                                                tool_name=tool_name,
-                                                action_name=p_dec.action_summary,
-                                                policy_evaluated=p_dec.policy_rule,
-                                                risk_level=p_dec.risk_level,
-                                                status="success",
-                                                actor="user_approved",
-                                                input_payload=tool_args,
-                                                output_payload={"result": str(tool_result)[:500]},
+                                                user_id=target_user_id, thread_id=None, tool_name=tool_name,
+                                                action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                                risk_level=p_dec.risk_level, status="success", actor="user_approved",
+                                                input_payload=tool_args, output_payload={"result": str(tool_result)[:500]},
                                             )
-                                    except Exception as e:
-                                        tool_result = f"Error executing {tool_name}: {e}"
+                                        except Exception as exc:
+                                            tool_result = f"Error executing {tool_name}: {exc}"
+                                    else:
+                                        chat_store.update_approval(
+                                            request_id, status="rejected", decision=user_decision, user_id=target_user_id
+                                        )
+                                        chat_store.record_audit_log(
+                                            user_id=target_user_id, thread_id=None, tool_name=tool_name,
+                                            action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                            risk_level=p_dec.risk_level, status="rejected", actor="user",
+                                            input_payload=tool_args, output_payload={"status": "Declined by user."},
+                                        )
+                                        tool_result = f"Action declined by user: {p_dec.action_summary}."
                             else:
                                 try:
                                     tool_result = await asyncio.to_thread(tool_func.invoke, tool_args)
                                     if chat_store:
                                         chat_store.record_audit_log(
-                                            user_id=target_user_id,
-                                            thread_id=None,
-                                            tool_name=tool_name,
-                                            action_name=p_dec.action_summary,
-                                            policy_evaluated=p_dec.policy_rule,
-                                            risk_level=p_dec.risk_level,
-                                            status="success",
-                                            actor="system",
-                                            input_payload=tool_args,
-                                            output_payload={"result": str(tool_result)[:500]},
+                                            user_id=target_user_id, thread_id=None, tool_name=tool_name,
+                                            action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                            risk_level=p_dec.risk_level, status="success", actor="system",
+                                            input_payload=tool_args, output_payload={"result": str(tool_result)[:500]},
                                         )
-                                except Exception as e:
-                                    tool_result = f"Error executing {tool_name}: {e}"
+                                except Exception as exc:
+                                    tool_result = f"Error executing {tool_name}: {exc}"
                         else:
-                            try:
-                                tool_result = await asyncio.to_thread(tool_func.invoke, tool_args)
-                                if chat_store:
-                                    try:
-                                        p_dec = policy_engine.evaluate_policy(
-                                            tool_name=tool_name,
-                                            tool_args=tool_args,
-                                            approved_tools=approved_tools,
+                            p_dec = policy_engine.evaluate_policy(
+                                tool_name=tool_name,
+                                tool_args=tool_args,
+                                approved_tools=approved_tools,
+                            )
+                            if p_dec.blocked:
+                                tool_result = f"Action blocked: {p_dec.reason}"
+                            elif p_dec.requires_approval or force_approval:
+                                approval = _start_action_approval(
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    tool_id=tool_id,
+                                    decision=p_dec,
+                                    target_user_id=target_user_id,
+                                    chat_store=chat_store,
+                                    active_interrupts=active_interrupts,
+                                    active_interrupt_owners=active_interrupt_owners,
+                                )
+                                if approval is None:
+                                    tool_result = "Blocked: this action requires explicit approval, but a secure approval session is unavailable."
+                                else:
+                                    request_id, future, approval_events = approval
+                                    for approval_event in approval_events:
+                                        yield approval_event
+                                    user_decision = await _await_action_approval(
+                                        request_id, future, tool_id, active_interrupts, active_interrupt_owners
+                                    )
+                                    is_approved, _ = _parse_action_approval(user_decision, p_dec.risk_level)
+                                    if is_approved:
+                                        if p_dec.risk_level != "critical":
+                                            approved_tools.add(tool_name.lower())
+                                        chat_store.update_approval(
+                                            request_id, status="approved", decision=user_decision, user_id=target_user_id
+                                        )
+                                        try:
+                                            tool_result = await asyncio.to_thread(tool_func.invoke, tool_args)
+                                            chat_store.record_audit_log(
+                                                user_id=target_user_id, thread_id=None, tool_name=tool_name,
+                                                action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                                risk_level=p_dec.risk_level, status="success", actor="user_approved",
+                                                input_payload=tool_args, output_payload={"result": str(tool_result)[:500]},
+                                            )
+                                        except Exception as exc:
+                                            tool_result = f"Error executing {tool_name}: {exc}"
+                                    else:
+                                        chat_store.update_approval(
+                                            request_id, status="rejected", decision=user_decision, user_id=target_user_id
                                         )
                                         chat_store.record_audit_log(
-                                            user_id=target_user_id,
-                                            thread_id=None,
-                                            tool_name=tool_name,
-                                            action_name=p_dec.action_summary,
-                                            policy_evaluated=p_dec.policy_rule,
-                                            risk_level=p_dec.risk_level,
-                                            status="success",
-                                            actor="system",
-                                            input_payload=tool_args,
-                                            output_payload={"result": str(tool_result)[:500]},
+                                            user_id=target_user_id, thread_id=None, tool_name=tool_name,
+                                            action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                            risk_level=p_dec.risk_level, status="rejected", actor="user",
+                                            input_payload=tool_args, output_payload={"status": "Declined by user."},
                                         )
-                                    except Exception:
-                                        pass
-                                if tool_name == "ask_question":
-                                    raw_qs = tool_args.get("questions") if isinstance(tool_args, dict) else None
-                                    if isinstance(raw_qs, list) and raw_qs:
-                                        yield {
-                                            "type": "ask_question",
-                                            "data": {
-                                                "request_id": f"q-{uuid4().hex[:8]}",
-                                                "questions": raw_qs,
-                                                "tool_call_id": tool_id,
-                                            },
-                                        }
-                            except Exception as e:
-                                tool_result = f"Error executing {tool_name}: {e}"
+                                        tool_result = f"Action declined by user: {p_dec.action_summary}."
+                            else:
+                                try:
+                                    tool_result = await asyncio.to_thread(tool_func.invoke, tool_args)
+                                    if chat_store:
+                                        chat_store.record_audit_log(
+                                            user_id=target_user_id, thread_id=None, tool_name=tool_name,
+                                            action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                            risk_level=p_dec.risk_level, status="success", actor="system",
+                                            input_payload=tool_args, output_payload={"result": str(tool_result)[:500]},
+                                        )
+                                except Exception as exc:
+                                    tool_result = f"Error executing {tool_name}: {exc}"
                     elif tool_name in mcp_tool_handlers:
                         conn, raw_mcp_name, cached_perm = mcp_tool_handlers[tool_name]
-                        # Re-read live permission in case user adjusted it in Settings
-                        live_perms = conn.get("tool_permissions") or {}
+                        live_perms = dict(conn.get("tool_permissions") or {})
                         perm = (
                             live_perms.get(raw_mcp_name)
                             or live_perms.get(raw_mcp_name.lower())
@@ -1657,276 +1737,122 @@ class ReActAgent:
                             or live_perms.get(raw_mcp_name.replace("_", "-"))
                             or cached_perm
                         )
-
-                        if raw_mcp_name.lower() in approved_tools or tool_name.lower() in approved_tools:
-                            perm = "allow"
-                        elif raw_mcp_name.lower() in declined_tools or tool_name.lower() in declined_tools:
+                        if raw_mcp_name.lower() in declined_tools or tool_name.lower() in declined_tools:
                             perm = "block"
+                        if perm:
+                            live_perms[raw_mcp_name] = perm
 
-                        if perm == "block":
-                            tool_result = f"Action blocked: Tool '{raw_mcp_name}' on connector '{conn['name']}' is blocked by permission settings."
-                        elif perm != "allow" or force_approval:
-                            if active_interrupts is not None:
-                                request_id = f"appr-{uuid4().hex[:8]}"
-                                loop = asyncio.get_running_loop()
-                                fut = loop.create_future()
-                                active_interrupts[request_id] = fut
-                                active_interrupts[tool_id] = fut
+                        p_dec = policy_engine.evaluate_policy(
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            connector_info={
+                                "id": conn.get("id"),
+                                "name": conn.get("name"),
+                                "raw_name": raw_mcp_name,
+                                "tool_permissions": live_perms,
+                            },
+                            approved_tools=approved_tools,
+                        )
 
-                                p_dec = policy_engine.evaluate_policy(
-                                    tool_name=tool_name,
-                                    tool_args=tool_args,
-                                    connector_info={
-                                        "id": conn.get("id"),
-                                        "name": conn.get("name"),
-                                        "raw_name": raw_mcp_name,
-                                        "tool_permissions": live_perms,
-                                    },
-                                    approved_tools=approved_tools,
+                        if p_dec.blocked:
+                            tool_result = f"Action blocked: {p_dec.reason}"
+                        elif p_dec.requires_approval or force_approval:
+                            approval = _start_action_approval(
+                                tool_name=raw_mcp_name,
+                                tool_args=tool_args,
+                                tool_id=tool_id,
+                                decision=p_dec,
+                                target_user_id=target_user_id,
+                                chat_store=chat_store,
+                                active_interrupts=active_interrupts,
+                                active_interrupt_owners=active_interrupt_owners,
+                                connector_id=conn.get("id"),
+                                connector_name=conn.get("name"),
+                            )
+                            if approval is None:
+                                tool_result = "Blocked: this connector action requires approval, but a secure approval session is unavailable. Retry from the Orbit chat."
+                            else:
+                                request_id, future, approval_events = approval
+                                for approval_event in approval_events:
+                                    yield approval_event
+                                user_decision = await _await_action_approval(
+                                    request_id, future, tool_id, active_interrupts, active_interrupt_owners
                                 )
-
-                                if chat_store:
-                                    try:
-                                        chat_store.create_approval(
-                                            approval_id=request_id,
-                                            user_id=target_user_id,
-                                            thread_id=None,
-                                            tool_name=raw_mcp_name,
-                                            connector_id=conn.get("id"),
-                                            action_summary=p_dec.action_summary,
-                                            risk_level=p_dec.risk_level,
-                                            details=p_dec.details,
-                                        )
-                                    except Exception as ce:
-                                        print(f"[agent] Could not create approval record: {ce}")
-
-                                approval_question = {
-                                    "question": f"Allow Orbit to execute '{raw_mcp_name}' on connector '{conn['name']}'?",
-                                    "options": p_dec.options or [
-                                        {
-                                            "title": "Allow once (Recommended)",
-                                            "description": f"Allow Orbit to run {raw_mcp_name} for this step and continue.",
-                                        },
-                                        {
-                                            "title": "Always allow this tool",
-                                            "description": f"Approve and remember 'Allow always' for '{raw_mcp_name}' in Settings.",
-                                        },
-                                        {
-                                            "title": "Decline action",
-                                            "description": "Reject this tool call and let Orbit adapt.",
-                                        },
-                                    ],
-                                    "is_multi_select": False,
-                                }
-                                yield {
-                                    "type": "interrupt",
-                                    "data": {
-                                        "interrupt_id": request_id,
-                                        "request_id": request_id,
-                                        "is_approval": True,
-                                        "risk_level": p_dec.risk_level,
-                                        "policy_rule": p_dec.policy_rule,
-                                        "action_summary": p_dec.action_summary,
-                                        "reason": p_dec.reason,
-                                        "details": p_dec.details,
-                                        "connector_id": conn.get("id"),
-                                        "connector_name": conn.get("name"),
-                                        "tool_name": raw_mcp_name,
-                                        "args": tool_args,
-                                        "questions": [approval_question],
-                                        "tool_call_id": tool_id,
-                                    },
-                                }
-                                yield {
-                                    "type": "ask_question",
-                                    "data": {
-                                        "interrupt_id": request_id,
-                                        "request_id": request_id,
-                                        "is_approval": True,
-                                        "risk_level": p_dec.risk_level,
-                                        "policy_rule": p_dec.policy_rule,
-                                        "action_summary": p_dec.action_summary,
-                                        "reason": p_dec.reason,
-                                        "details": p_dec.details,
-                                        "connector_id": conn.get("id"),
-                                        "connector_name": conn.get("name"),
-                                        "tool_name": raw_mcp_name,
-                                        "args": tool_args,
-                                        "questions": [approval_question],
-                                        "tool_call_id": tool_id,
-                                    },
-                                }
-
-                                try:
-                                    user_decision = await asyncio.wait_for(asyncio.shield(fut), timeout=300.0)
-                                except asyncio.TimeoutError:
-                                    user_decision = {"action": "decline", "reason": "Approval timed out after 5 minutes."}
-                                except Exception as exc:
-                                    user_decision = {"action": "decline", "reason": str(exc)}
-                                finally:
-                                    active_interrupts.pop(request_id, None)
-                                    active_interrupts.pop(tool_id, None)
-
-                                resumed_from_interrupt = True
-
-                                action = str(user_decision.get("action", "")).lower()
-                                selected_titles = [str(t).lower() for t in (user_decision.get("selected_titles") or [])]
-                                custom_val = str(user_decision.get("custom_text") or user_decision.get("reason") or "").lower()
-
-                                is_decline = (
-                                    action in ("decline", "reject", "block", "deny", "cancel", "skip")
-                                    or any(w in action for w in ("decline", "reject", "block", "deny", "cancel"))
-                                    or any(w in t for t in selected_titles for w in ("decline", "reject", "block", "deny", "cancel"))
+                                is_approved, always_allow = _parse_action_approval(
+                                    user_decision, p_dec.risk_level
                                 )
-
-                                is_approve = not is_decline and (
-                                    action in ("approve", "allow", "yes", "proceed", "once", "continue")
-                                    or any(w in t for t in selected_titles for w in ("approve", "allow", "yes", "proceed", "every time", "once", "continue", "auto-approve"))
-                                    or any(w in custom_val for w in ("approve", "allow", "yes", "proceed", "sure", "ok", "yep", "run", "do it"))
-                                    or True
-                                )
-                                is_session_once = any("once" in t for t in selected_titles)
-                                is_always = (
-                                    bool(user_decision.get("always_allow"))
-                                    or any("always allow" in t or "auto-approve" in t for t in selected_titles)
-                                    or "always" in custom_val
-                                )
-
-                                if is_always and target_user_id and chat_store and conn.get("id"):
-                                    try:
-                                        existing_conn = chat_store.get_personal_connector(target_user_id, conn["id"])
+                                if is_approved:
+                                    if always_allow:
+                                        existing_conn = chat_store.get_personal_connector(
+                                            target_user_id, conn["id"]
+                                        ) if target_user_id and conn.get("id") else None
                                         if existing_conn:
-                                            perms = dict(existing_conn.get("tool_permissions") or {})
-                                            perms[raw_mcp_name] = "allow"
-                                            perms[tool_name] = "allow"
+                                            permissions = dict(existing_conn.get("tool_permissions") or {})
+                                            permissions[raw_mcp_name] = "allow"
                                             chat_store.update_personal_connector(
-                                                target_user_id,
-                                                conn["id"],
-                                                tool_permissions=perms,
+                                                target_user_id, conn["id"], tool_permissions=permissions
                                             )
-                                    except Exception as perm_err:
-                                        print(f"[agent] Could not save always-allow permission: {perm_err}")
-
-                                if is_approve or is_session_once:
-                                    if chat_store:
-                                        try:
-                                            chat_store.update_approval(request_id, status="approved", decision=user_decision)
-                                        except Exception as ae:
-                                            print(f"[agent] Error updating approval: {ae}")
-
-                                    approved_tools.add(raw_mcp_name.lower())
-                                    approved_tools.add(tool_name.lower())
+                                    if p_dec.risk_level != "critical":
+                                        approved_tools.add(raw_mcp_name.lower())
+                                        approved_tools.add(tool_name.lower())
+                                    chat_store.update_approval(
+                                        request_id, status="approved", decision=user_decision, user_id=target_user_id
+                                    )
                                     try:
-                                        import mcp_client
-
                                         custom_headers = {
                                             str(h.get("key", "")).strip(): str(h.get("value", ""))
                                             for h in (conn.get("headers") or [])
                                             if isinstance(h, dict) and str(h.get("key", "")).strip()
                                         }
                                         tool_result = await _execute_mcp_tool_with_auto_refresh(
-                                            conn,
-                                            raw_mcp_name,
+                                            conn, raw_mcp_name,
                                             tool_args if isinstance(tool_args, dict) else {},
                                             custom_headers=custom_headers,
                                             target_user_id=target_user_id,
                                             chat_store=chat_store,
                                         )
-                                        if chat_store:
-                                            chat_store.record_audit_log(
-                                                user_id=target_user_id,
-                                                thread_id=None,
-                                                tool_name=raw_mcp_name,
-                                                action_name=p_dec.action_summary,
-                                                policy_evaluated=p_dec.policy_rule,
-                                                risk_level=p_dec.risk_level,
-                                                status="success",
-                                                actor="user_approved",
-                                                input_payload=tool_args,
-                                                output_payload={"result": str(tool_result)[:500]},
-                                            )
-                                    except Exception as e:
-                                        tool_result = f"Error calling MCP tool '{raw_mcp_name}': {e}"
+                                        chat_store.record_audit_log(
+                                            user_id=target_user_id, thread_id=None, tool_name=raw_mcp_name,
+                                            action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                            risk_level=p_dec.risk_level, status="success", actor="user_approved",
+                                            input_payload=tool_args, output_payload={"result": str(tool_result)[:500]},
+                                        )
+                                    except Exception as exc:
+                                        tool_result = f"Error calling MCP tool '{raw_mcp_name}': {exc}"
                                 else:
-                                    if chat_store:
-                                        try:
-                                            chat_store.update_approval(request_id, status="rejected", decision=user_decision)
-                                            chat_store.record_audit_log(
-                                                user_id=target_user_id,
-                                                thread_id=None,
-                                                tool_name=raw_mcp_name,
-                                                action_name=p_dec.action_summary,
-                                                policy_evaluated=p_dec.policy_rule,
-                                                risk_level=p_dec.risk_level,
-                                                status="rejected",
-                                                actor="user",
-                                                input_payload=tool_args,
-                                                output_payload={"status": "Declined by user."},
-                                            )
-                                        except Exception as ae:
-                                            print(f"[agent] Error recording audit log: {ae}")
-
-                                    custom_text = user_decision.get("custom_text") or user_decision.get("reason") or ""
-                                    tool_result = (
-                                        f"Action declined by user. {custom_text} "
-                                        "Please suggest an alternative approach or acknowledge."
+                                    chat_store.update_approval(
+                                        request_id, status="rejected", decision=user_decision, user_id=target_user_id
                                     )
-                            else:
-                                approval_question = {
-                                    "question": f"Allow Orbit to execute '{raw_mcp_name}' on connector '{conn['name']}'?",
-                                    "options": [
-                                        {
-                                            "title": "Allow once (Recommended)",
-                                            "description": f"Allow Orbit to run {raw_mcp_name} for this step and continue.",
-                                        },
-                                        {
-                                            "title": "Always allow this tool",
-                                            "description": f"Approve and remember 'Allow always' for {raw_mcp_name} in Settings.",
-                                        },
-                                        {
-                                            "title": "Decline action",
-                                            "description": "Reject this tool call and let Orbit adapt.",
-                                        },
-                                    ],
-                                    "is_multi_select": False,
-                                }
-                                yield {
-                                    "type": "ask_question",
-                                    "data": {
-                                        "request_id": f"appr-{uuid4().hex[:8]}",
-                                        "is_approval": True,
-                                        "connector_id": conn.get("id"),
-                                        "connector_name": conn.get("name"),
-                                        "tool_name": raw_mcp_name,
-                                        "args": tool_args,
-                                        "questions": [approval_question],
-                                        "tool_call_id": tool_id,
-                                    },
-                                }
-                                tool_result = (
-                                    f"Permission required: Tool '{raw_mcp_name}' on connector '{conn['name']}' "
-                                    "is set to 'Needs approval'. Switch it to 'Allow always' in Settings -> "
-                                    "Capabilities -> Connectors to let Orbit call it automatically."
-                                )
+                                    chat_store.record_audit_log(
+                                        user_id=target_user_id, thread_id=None, tool_name=raw_mcp_name,
+                                        action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                        risk_level=p_dec.risk_level, status="rejected", actor="user",
+                                        input_payload=tool_args, output_payload={"status": "Declined by user."},
+                                    )
+                                    tool_result = f"Action declined by user. Please suggest an alternative."
                         else:
                             try:
-                                import mcp_client
-
                                 custom_headers = {
                                     str(h.get("key", "")).strip(): str(h.get("value", ""))
                                     for h in (conn.get("headers") or [])
                                     if isinstance(h, dict) and str(h.get("key", "")).strip()
                                 }
                                 tool_result = await _execute_mcp_tool_with_auto_refresh(
-                                    conn,
-                                    raw_mcp_name,
+                                    conn, raw_mcp_name,
                                     tool_args if isinstance(tool_args, dict) else {},
                                     custom_headers=custom_headers,
                                     target_user_id=target_user_id,
                                     chat_store=chat_store,
                                 )
-                            except Exception as e:
-                                tool_result = f"Error calling MCP tool '{raw_mcp_name}': {e}"
+                                if chat_store:
+                                    chat_store.record_audit_log(
+                                        user_id=target_user_id, thread_id=None, tool_name=raw_mcp_name,
+                                        action_name=p_dec.action_summary, policy_evaluated=p_dec.policy_rule,
+                                        risk_level=p_dec.risk_level, status="success", actor="system",
+                                        input_payload=tool_args, output_payload={"result": str(tool_result)[:500]},
+                                    )
+                            except Exception as exc:
+                                tool_result = f"Error calling MCP tool '{raw_mcp_name}': {exc}"
                     else:
                         tool_result = f"Error: Tool '{tool_name}' not found."
 

@@ -26,6 +26,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from psycopg.errors import UniqueViolation
 from database import PostgresDatabase
+from credential_vault import CredentialVault
 
 import croniter
 from dateutil import parser as dt_parser
@@ -615,6 +616,14 @@ class ProactiveStore:
         routine_id = f"rtn_{uuid4().hex[:12]}"
         now = utc_now_iso()
         resolved_type = routine_type or ("reminder" if one_shot else "task")
+        stored_webhook_token = (
+            hashlib.sha256(webhook_token.encode("utf-8")).hexdigest()
+            if webhook_token else None
+        )
+        stored_webhook_secret = (
+            CredentialVault().encrypt_text(webhook_secret)
+            if webhook_secret else None
+        )
         with self._lock, self._connection() as conn:
             conn.execute(
                 """
@@ -640,8 +649,8 @@ class ProactiveStore:
                     1 if one_shot else 0,
                     next_run_at,
                     target_thread_id,
-                    webhook_token,
-                    webhook_secret,
+                    stored_webhook_token,
+                    stored_webhook_secret,
                     1 if require_approval else 0,
                     now,
                     now,
@@ -663,7 +672,15 @@ class ProactiveStore:
                         routine_id,
                     ),
                 )
-        return self.get_routine(routine_id)  # type: ignore
+        created = self.get_routine(routine_id)
+        if created is not None:
+            # Return newly-created webhook credentials once to the owning user.
+            # Subsequent list/detail reads never reveal them again.
+            if webhook_token:
+                created["webhook_token"] = webhook_token
+            if webhook_secret:
+                created["webhook_secret"] = webhook_secret
+        return created  # type: ignore
 
     def get_routine(self, routine_id: str) -> Optional[Dict[str, Any]]:
         with self._connection() as conn:
@@ -673,6 +690,9 @@ class ProactiveStore:
             if not row:
                 return None
             res = dict(row)
+            # Never return stored webhook credentials in ordinary routine reads.
+            res.pop("webhook_token", None)
+            res.pop("webhook_secret", None)
             res["one_shot"] = bool(res["one_shot"])
             res["enabled"] = bool(res["enabled"])
             res["require_approval"] = bool(res["require_approval"])
@@ -717,18 +737,66 @@ class ProactiveStore:
         return str(row["chat_thread_id"]) if row else None
 
     def get_routine_by_webhook(self, token: str) -> Optional[Dict[str, Any]]:
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT * FROM proactive_routines WHERE webhook_token = %s AND enabled = 1",
-                (token,),
+                """
+                SELECT * FROM proactive_routines
+                WHERE (webhook_token = %s OR webhook_token = %s) AND enabled = 1
+                """,
+                (token_hash, token),
             ).fetchone()
             if not row:
                 return None
             res = dict(row)
+            if res.get("webhook_secret"):
+                res["webhook_secret"] = CredentialVault().decrypt_text(
+                    str(res["webhook_secret"])
+                )
             res["one_shot"] = bool(res["one_shot"])
             res["enabled"] = bool(res["enabled"])
             res["require_approval"] = bool(res["require_approval"])
             return res
+
+    def migrate_webhook_credentials(self) -> dict[str, int]:
+        """Hash stored webhook bearer tokens and encrypt signing secrets."""
+        vault = CredentialVault()
+        if not vault.configured:
+            raise RuntimeError(
+                "Webhook credential migration requires the shared credential encryption key."
+            )
+        migrated_tokens = 0
+        migrated_secrets = 0
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, webhook_token, webhook_secret
+                FROM proactive_routines
+                WHERE webhook_token IS NOT NULL OR webhook_secret IS NOT NULL
+                """
+            ).fetchall()
+            for row in rows:
+                updates = []
+                values: list[Any] = []
+                token = row.get("webhook_token")
+                secret = row.get("webhook_secret")
+                if token and not re.fullmatch(r"[0-9a-f]{64}", str(token)):
+                    updates.append("webhook_token = %s")
+                    values.append(hashlib.sha256(str(token).encode("utf-8")).hexdigest())
+                    migrated_tokens += 1
+                if secret and not str(secret).startswith("enc:v1:"):
+                    updates.append("webhook_secret = %s")
+                    values.append(vault.encrypt_text(str(secret)))
+                    migrated_secrets += 1
+                if updates:
+                    conn.execute(
+                        f"UPDATE proactive_routines SET {', '.join(updates)}, updated_at = %s WHERE id = %s",
+                        (*values, utc_now_iso(), row["id"]),
+                    )
+        return {
+            "webhook_tokens_hashed": migrated_tokens,
+            "webhook_secrets_encrypted": migrated_secrets,
+        }
 
     def list_routines(
         self, user_id: Optional[str] = None, enabled_only: bool = False
@@ -747,6 +815,8 @@ class ProactiveStore:
             out = []
             for r in rows:
                 item = dict(r)
+                item.pop("webhook_token", None)
+                item.pop("webhook_secret", None)
                 item["one_shot"] = bool(item["one_shot"])
                 item["enabled"] = bool(item["enabled"])
                 item["require_approval"] = bool(item["require_approval"])

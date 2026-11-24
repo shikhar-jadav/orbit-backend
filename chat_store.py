@@ -11,10 +11,62 @@ from pathlib import Path
 from typing import Any, Iterator, Optional, Dict, List
 
 from database import PostgresDatabase
+from credential_vault import CredentialVault
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _redact_sensitive_payload(value: Any, key: str = "") -> Any:
+    secret_key = re.compile(
+        r"(?:secret|token|password|passwd|api[_-]?key|access[_-]?key|"
+        r"private[_-]?key|credential|authorization)",
+        re.IGNORECASE,
+    )
+    if secret_key.search(key):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        result = {}
+        for item_key, item_value in value.items():
+            if str(item_key).lower() in {"headers", "request_headers", "authorization_headers"}:
+                result[str(item_key)] = "[REDACTED]"
+            else:
+                result[str(item_key)] = _redact_sensitive_payload(item_value, str(item_key))
+        return result
+    if isinstance(value, list):
+        return [_redact_sensitive_payload(item, key) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_sensitive_payload(item, key) for item in value]
+    if isinstance(value, str):
+        return re.sub(
+            r"(?i)(bearer\\s+)[A-Za-z0-9._~+/=-]+",
+            r"\\1[REDACTED]",
+            value,
+        )
+    return value
+
+
+def _mask_secret_fields(value: Any, vault: CredentialVault) -> Any:
+    secret_key = re.compile(
+        r"(?:secret|token|password|passwd|api[_-]?key|access[_-]?key|"
+        r"private[_-]?key|credential|authorization)",
+        re.IGNORECASE,
+    )
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "••••••"
+                if isinstance(item, str) and item
+                else _mask_secret_fields(item, vault)
+            )
+            if secret_key.search(str(key))
+            else _mask_secret_fields(item, vault)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_secret_fields(item, vault) for item in value]
+    return value
 
 
 _thread_cache: dict[str, tuple[dict[str, Any], float]] = {}
@@ -34,6 +86,12 @@ def invalidate_thread_cache(thread_id: Optional[str] = None) -> None:
 class PostgresChatStore:
     def __init__(self, database: PostgresDatabase):
         self.database = database
+
+    @property
+    def credential_vault(self) -> CredentialVault:
+        # Resolve from the current process environment so tests and key rotation
+        # can supply the active key without recreating the store instance.
+        return CredentialVault()
 
     @contextmanager
     def _connection(self) -> Iterator:
@@ -2288,13 +2346,14 @@ class PostgresChatStore:
         except Exception:
             raw_headers = []
 
+        vault = self.credential_vault
         if include_secrets:
-            headers_out = raw_headers
+            headers_out = vault.decrypt_headers(raw_headers)
         else:
             headers_out = [
                 {
                     "key": str(item.get("key", "")),
-                    "masked_value": self._mask_header_value(str(item.get("value", ""))),
+                    "masked_value": "••••••" if item.get("value") else "",
                     "has_value": bool(item.get("value")),
                 }
                 for item in raw_headers
@@ -2308,11 +2367,11 @@ class PostgresChatStore:
         except Exception:
             advanced = {}
 
-        if not include_secrets and advanced.get("oauth_client_secret"):
-            advanced = {
-                **advanced,
-                "oauth_client_secret": self._mask_header_value(str(advanced["oauth_client_secret"])),
-            }
+        advanced = (
+            vault.decrypt_secret_fields(advanced)
+            if include_secrets
+            else _mask_secret_fields(advanced, vault)
+        )
 
         try:
             tools = json.loads(row["tools_json"] or "[]")
@@ -2409,6 +2468,9 @@ class PostgresChatStore:
             if isinstance(h, dict) and str(h.get("key", "")).strip()
         ]
         safe_tools = tools if isinstance(tools, list) else []
+        vault = self.credential_vault
+        encrypted_headers = vault.encrypt_headers(clean_headers)
+        encrypted_advanced = vault.encrypt_secret_fields(advanced or {})
         perms = dict(tool_permissions or {})
         for t in safe_tools:
             tname = t.get("name") if isinstance(t, dict) else None
@@ -2432,8 +2494,8 @@ class PostgresChatStore:
                     mcp_url.strip(),
                     connector_type or "Web",
                     safe_auth,
-                    json.dumps(clean_headers, ensure_ascii=False),
-                    json.dumps(advanced or {}, ensure_ascii=False),
+                    json.dumps(encrypted_headers, ensure_ascii=False),
+                    json.dumps(encrypted_advanced, ensure_ascii=False),
                     json.dumps(safe_tools, ensure_ascii=False),
                     json.dumps(perms, ensure_ascii=False),
                     1 if is_connected else 0,
@@ -2494,7 +2556,7 @@ class PostgresChatStore:
                     v = existing_by_key[k.lower()]
                 merged_headers.append({"key": k, "value": v})
             updates.append("headers_json = %s")
-            params.append(json.dumps(merged_headers, ensure_ascii=False))
+            params.append(json.dumps(self.credential_vault.encrypt_headers(merged_headers), ensure_ascii=False))
         if advanced is not None:
             merged_adv = dict(existing.get("advanced", {}))
             for k, v in advanced.items():
@@ -2502,7 +2564,7 @@ class PostgresChatStore:
                     continue
                 merged_adv[k] = v
             updates.append("advanced_json = %s")
-            params.append(json.dumps(merged_adv, ensure_ascii=False))
+            params.append(json.dumps(self.credential_vault.encrypt_secret_fields(merged_adv), ensure_ascii=False))
         if tools is not None:
             updates.append("tools_json = %s")
             params.append(json.dumps(tools, ensure_ascii=False))
@@ -2549,6 +2611,92 @@ class PostgresChatStore:
             )
         return cursor.rowcount > 0
 
+    def migrate_legacy_connector_credentials(self) -> dict[str, int]:
+        """Encrypt pre-vault custom connector and marketplace secrets in place."""
+        vault = self.credential_vault
+        if not vault.configured:
+            raise RuntimeError(
+                "Credential migration requires ORBIT_CREDENTIAL_ENCRYPTION_KEY "
+                "or INTEGRATION_TOKEN_ENCRYPTION_KEY."
+            )
+
+        personal_count = 0
+        marketplace_count = 0
+        with self._connection() as connection:
+            personal_rows = connection.execute(
+                "SELECT id, user_id, headers_json, advanced_json FROM user_personal_connectors"
+            ).fetchall()
+            for row in personal_rows:
+                headers = json.loads(row["headers_json"] or "[]")
+                advanced = json.loads(row["advanced_json"] or "{}")
+                encrypted_headers = vault.encrypt_headers(headers)
+                encrypted_advanced = vault.encrypt_secret_fields(advanced)
+                if encrypted_headers != headers or encrypted_advanced != advanced:
+                    connection.execute(
+                        """
+                        UPDATE user_personal_connectors
+                        SET headers_json = %s, advanced_json = %s, updated_at = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (
+                            json.dumps(encrypted_headers, ensure_ascii=False),
+                            json.dumps(encrypted_advanced, ensure_ascii=False),
+                            _utc_now(),
+                            row["id"],
+                            row["user_id"],
+                        ),
+                    )
+                    personal_count += 1
+
+            from marketplace import AVAILABLE_CONNECTORS
+
+            catalog = {item["id"]: item for item in AVAILABLE_CONNECTORS}
+            setting_rows = connection.execute(
+                """
+                SELECT user_id, key, value FROM user_settings
+                WHERE key LIKE 'connector_%_config'
+                """
+            ).fetchall()
+            for row in setting_rows:
+                setting_key = str(row["key"])
+                connector_id = setting_key[len("connector_"):-len("_config")]
+                connector = catalog.get(connector_id)
+                if not connector:
+                    continue
+                try:
+                    config = json.loads(row["value"] or "{}")
+                except (TypeError, ValueError):
+                    continue
+                changed = False
+                for field in connector.get("configFields", []):
+                    if field.get("type") != "password":
+                        continue
+                    key = field.get("key")
+                    value = config.get(key) if key else None
+                    if value:
+                        encrypted = vault.encrypt_text(str(value))
+                        if encrypted != value:
+                            config[key] = encrypted
+                            changed = True
+                if changed:
+                    connection.execute(
+                        """
+                        UPDATE user_settings SET value = %s
+                        WHERE user_id = %s AND key = %s
+                        """,
+                        (
+                            json.dumps(config, ensure_ascii=False),
+                            row["user_id"],
+                            setting_key,
+                        ),
+                    )
+                    marketplace_count += 1
+
+        return {
+            "personal_connectors_migrated": personal_count,
+            "marketplace_connectors_migrated": marketplace_count,
+        }
+
     # --------------------------------------------------------------------------
     # Trust Engine: Approvals & Immutable Audit Logging
     # --------------------------------------------------------------------------
@@ -2565,7 +2713,7 @@ class PostgresChatStore:
         details: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         now = _utc_now()
-        details_json = json.dumps(details or {}, ensure_ascii=False)
+        details_json = json.dumps(_redact_sensitive_payload(details or {}), ensure_ascii=False)
         with self._connection() as connection:
             connection.execute(
                 """
@@ -2607,18 +2755,29 @@ class PostgresChatStore:
         approval_id: str,
         status: str,
         decision: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         now = _utc_now()
-        decision_json = json.dumps(decision or {}, ensure_ascii=False)
+        decision_json = json.dumps(_redact_sensitive_payload(decision or {}), ensure_ascii=False)
         with self._connection() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE approvals
-                SET status = %s, decision_json = %s, resolved_at = %s
-                WHERE id = %s
-                """,
-                (status, decision_json, now, approval_id),
-            )
+            if user_id is None:
+                cursor = connection.execute(
+                    """
+                    UPDATE approvals
+                    SET status = %s, decision_json = %s, resolved_at = %s
+                    WHERE id = %s AND status = 'pending'
+                    """,
+                    (status, decision_json, now, approval_id),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE approvals
+                    SET status = %s, decision_json = %s, resolved_at = %s
+                    WHERE id = %s AND user_id = %s AND status = 'pending'
+                    """,
+                    (status, decision_json, now, approval_id, user_id),
+                )
             if cursor.rowcount == 0:
                 return None
         return self.get_approval(approval_id)
@@ -2702,8 +2861,8 @@ class PostgresChatStore:
     ) -> Dict[str, Any]:
         log_id = f"aud-{uuid.uuid4().hex[:12]}"
         now = _utc_now()
-        in_json = json.dumps(input_payload if input_payload is not None else {}, ensure_ascii=False)
-        out_json = json.dumps(output_payload if output_payload is not None else {}, ensure_ascii=False)
+        in_json = json.dumps(_redact_sensitive_payload(input_payload if input_payload is not None else {}), ensure_ascii=False)
+        out_json = json.dumps(_redact_sensitive_payload(output_payload if output_payload is not None else {}), ensure_ascii=False)
 
         with self._connection() as connection:
             connection.execute(
