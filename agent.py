@@ -343,7 +343,7 @@ Supported actions:
    - If the user changes an earlier preference, contradicts an old rule, or requests deletion, update or delete the old entry immediately with `action="delete"` or `action="update"`.
 
 # 9. External Services and Integrations
-Use `search_available_tools` to discover and load connected MCP tools when an external service or integration is required.
+Use `search_available_tools` with specific action/topic keywords (e.g., "commit", "file", "issue", "pull request", "email") to discover and load connected MCP tools when an external service or integration is required.
 
 Operating procedure:
 1. Identify the external service and required capability.
@@ -1398,8 +1398,8 @@ class ReActAgent:
                     tool_func = self.tools_by_name.get(tool_name)
                     if tool_name == "search_available_tools":
                         query = str(tool_args.get("query", "") if isinstance(tool_args, dict) else "").strip().lower()
-                        raw_limit = int(tool_args.get("limit", 5) if isinstance(tool_args, dict) else 5)
-                        limit = max(1, min(raw_limit, 8))
+                        raw_limit = int(tool_args.get("limit", 10) if isinstance(tool_args, dict) else 10)
+                        limit = max(1, min(raw_limit, 20))
                         query_words = [w for w in re.split(r"\W+", query) if len(w) > 1]
 
                         scored_tools = []
@@ -1423,7 +1423,14 @@ class ReActAgent:
                             if score > 0 or not query_words:
                                 scored_tools.append((score, t_entry))
 
-                        scored_tools.sort(key=lambda x: x[0], reverse=True)
+                        # Prefer higher match score, and break ties in favor of read-only tools first.
+                        scored_tools.sort(
+                            key=lambda x: (
+                                x[0],
+                                1 if x[1].get("perm") == "allow" else 0,
+                            ),
+                            reverse=True,
+                        )
                         matched = [t for _, t in scored_tools[:max(1, limit)]]
 
                         if not matched and all_catalog_tools and query_words:
@@ -1462,11 +1469,21 @@ class ReActAgent:
                             )
                         else:
                             lines = [f"Loaded {len(matched)} tools:\n", "Matched tools:"]
+                            matched_names = {t["bound_name"] for t in matched}
                             for c_name, c_tools in by_conn.items():
                                 lines.append(f"  {c_name} ({len(c_tools)}):")
                                 for ct in c_tools:
                                     s_desc = ct["description"][:80].strip()
                                     lines.append(f"    - {ct['raw_name']}: {s_desc}")
+                                remaining = [
+                                    t["raw_name"]
+                                    for b, t in all_catalog_tools.items()
+                                    if t["connector_name"] == c_name and b not in matched_names
+                                ]
+                                if remaining:
+                                    lines.append(
+                                        f"    (More {c_name} tools available via search_available_tools: {', '.join(remaining[:25])})"
+                                    )
 
                             tool_result = "\n".join(lines)
                     elif tool_func:
