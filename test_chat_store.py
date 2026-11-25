@@ -81,6 +81,22 @@ class TestPostgresChatStore(unittest.TestCase):
         self.assertTrue(
             self.store.select_turn_version(thread["thread_id"], user["id"], 1)
         )
+        restored = self.store.get_thread(thread["thread_id"])
+        self.assertEqual(
+            [message["content"] for message in restored["messages"]],
+            ["First prompt", "First answer", "Follow-up", "Follow-up answer"],
+        )
+        self.assertTrue(
+            self.store.select_turn_version(thread["thread_id"], user["id"], 2)
+        )
+        reselected = self.store.get_thread(thread["thread_id"])
+        self.assertEqual(
+            [message["content"] for message in reselected["messages"]],
+            ["Edited prompt", "Alternate answer"],
+        )
+        self.assertTrue(
+            self.store.select_turn_version(thread["thread_id"], user["id"], 1)
+        )
         branch = self.store.branch_thread(thread["thread_id"], user["id"], 2)
         self.assertIsNotNone(branch)
         source_thread = self.store.get_thread(thread["thread_id"])

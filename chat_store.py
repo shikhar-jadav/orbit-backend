@@ -931,6 +931,21 @@ class PostgresChatStore:
             "history": [dict(row) for row in history],
         }
 
+    @staticmethod
+    def _capture_active_followups(
+        connection: Any, thread_id: str, assistant_message_id: int
+    ) -> Optional[str]:
+        rows = connection.execute(
+            """
+            SELECT id FROM messages
+            WHERE thread_id = %s AND is_active = 1 AND id > %s
+            ORDER BY id
+            """,
+            (thread_id, assistant_message_id),
+        ).fetchall()
+        ids = [int(row["id"]) for row in rows]
+        return json.dumps(ids) if ids else None
+
     def save_turn_version(
         self,
         thread_id: str,
@@ -946,7 +961,7 @@ class PostgresChatStore:
         with self._connection() as connection:
             user = connection.execute(
                 """
-                SELECT id, content FROM messages
+                SELECT id, content, selected_version FROM messages
                 WHERE id = %s AND thread_id = %s AND role = 'user' AND is_active = 1
                 """,
                 (user_message_id, thread_id),
@@ -963,6 +978,10 @@ class PostgresChatStore:
             ).fetchone()
             if assistant is None:
                 raise ValueError("The selected user message has no completed response.")
+            previous_version = int(user["selected_version"] or 1)
+            followup_ids_json = self._capture_active_followups(
+                connection, thread_id, assistant["id"]
+            )
             maximum = connection.execute(
                 "SELECT MAX(version_index) AS maximum FROM turn_versions WHERE user_message_id = %s",
                 (user_message_id,),
@@ -972,8 +991,9 @@ class PostgresChatStore:
                     """
                     INSERT INTO turn_versions (
                         user_message_id, assistant_message_id, version_index,
-                        user_content, assistant_content, created_at, tools_json, parts_json
-                    ) VALUES (%s, %s, 1, %s, %s, %s, %s, %s)
+                        user_content, assistant_content, created_at, tools_json, parts_json,
+                        followup_message_ids_json
+                    ) VALUES (%s, %s, 1, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_message_id,
@@ -983,9 +1003,19 @@ class PostgresChatStore:
                         now,
                         assistant["tools_json"],
                         assistant["parts_json"],
+                        followup_ids_json,
                     ),
                 )
                 maximum = 1
+            else:
+                connection.execute(
+                    """
+                    UPDATE turn_versions
+                    SET followup_message_ids_json = %s
+                    WHERE user_message_id = %s AND version_index = %s
+                    """,
+                    (followup_ids_json, user_message_id, previous_version),
+                )
             version_index = maximum + 1
             connection.execute(
                 "UPDATE messages SET is_active = 0 WHERE thread_id = %s AND id > %s",
@@ -1031,7 +1061,7 @@ class PostgresChatStore:
         with self._connection() as connection:
             user = connection.execute(
                 """
-                SELECT id, content FROM messages
+                SELECT id, content, selected_version FROM messages
                 WHERE id = %s AND thread_id = %s AND role = 'user' AND is_active = 1
                 """,
                 (user_message_id, thread_id),
@@ -1048,6 +1078,10 @@ class PostgresChatStore:
             ).fetchone()
             if assistant is None:
                 raise ValueError("The selected user message has no completed response.")
+            previous_version = int(user["selected_version"] or 1)
+            followup_ids_json = self._capture_active_followups(
+                connection, thread_id, assistant["id"]
+            )
             maximum = connection.execute(
                 "SELECT MAX(version_index) AS maximum FROM turn_versions WHERE user_message_id = %s",
                 (user_message_id,),
@@ -1057,8 +1091,9 @@ class PostgresChatStore:
                     """
                     INSERT INTO turn_versions (
                         user_message_id, assistant_message_id, version_index,
-                        user_content, assistant_content, created_at, tools_json, parts_json
-                    ) VALUES (%s, %s, 1, %s, %s, %s, %s, %s)
+                        user_content, assistant_content, created_at, tools_json, parts_json,
+                        followup_message_ids_json
+                    ) VALUES (%s, %s, 1, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_message_id,
@@ -1068,9 +1103,19 @@ class PostgresChatStore:
                         now,
                         assistant["tools_json"],
                         assistant["parts_json"],
+                        followup_ids_json,
                     ),
                 )
                 maximum = 1
+            else:
+                connection.execute(
+                    """
+                    UPDATE turn_versions
+                    SET followup_message_ids_json = %s
+                    WHERE user_message_id = %s AND version_index = %s
+                    """,
+                    (followup_ids_json, user_message_id, previous_version),
+                )
             version_index = maximum + 1
             connection.execute(
                 "UPDATE messages SET is_active = 0 WHERE thread_id = %s AND id > %s",
@@ -1189,7 +1234,7 @@ class PostgresChatStore:
         with self._connection() as connection:
             user = connection.execute(
                 """
-                SELECT id FROM messages
+                SELECT id, selected_version FROM messages
                 WHERE id = %s AND thread_id = %s AND role = 'user' AND is_active = 1
                 """,
                 (user_message_id, thread_id),
@@ -1197,7 +1242,7 @@ class PostgresChatStore:
             variant = connection.execute(
                 """
                 SELECT assistant_message_id, user_content, assistant_content, failed,
-                    tools_json, parts_json
+                    tools_json, parts_json, followup_message_ids_json
                 FROM turn_versions
                 WHERE user_message_id = %s AND version_index = %s
                 """,
@@ -1205,10 +1250,39 @@ class PostgresChatStore:
             ).fetchone()
             if user is None or variant is None:
                 return False
+            previous_version = int(user["selected_version"] or 1)
+            if previous_version != version_index:
+                current_followups_json = self._capture_active_followups(
+                    connection, thread_id, variant["assistant_message_id"]
+                )
+                connection.execute(
+                    """
+                    UPDATE turn_versions
+                    SET followup_message_ids_json = %s
+                    WHERE user_message_id = %s AND version_index = %s
+                    """,
+                    (current_followups_json, user_message_id, previous_version),
+                )
             connection.execute(
                 "UPDATE messages SET is_active = 0 WHERE thread_id = %s AND id > %s",
                 (thread_id, variant["assistant_message_id"]),
             )
+            raw_followups = variant.get("followup_message_ids_json")
+            if raw_followups:
+                try:
+                    followup_ids = [
+                        int(item)
+                        for item in json.loads(raw_followups)
+                        if isinstance(item, int)
+                    ]
+                except (TypeError, ValueError):
+                    followup_ids = []
+                if followup_ids:
+                    id_slots = ", ".join(["%s"] * len(followup_ids))
+                    connection.execute(
+                        f"UPDATE messages SET is_active = 1 WHERE thread_id = %s AND id IN ({id_slots})",
+                        [thread_id, *followup_ids],
+                    )
             connection.execute(
                 "UPDATE messages SET content = %s, selected_version = %s, failed = 0 WHERE id = %s",
                 (variant["user_content"], version_index, user_message_id),
