@@ -60,6 +60,60 @@ GITHUB_MCP_CONNECTOR: Dict[str, Any] = {
 
 AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR, GITHUB_MCP_CONNECTOR]
 
+MARKETPLACE_MCPS_PATH = BASE_DIR / "data" / "marketplace_mcps.json"
+
+
+def _load_marketplace_mcps() -> None:
+    if not MARKETPLACE_MCPS_PATH.is_file():
+        return
+    try:
+        entries = json.loads(MARKETPLACE_MCPS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(entries, list):
+        return
+    existing_ids = {c["id"] for c in AVAILABLE_CONNECTORS}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        cid = str(entry.get("id") or "").strip()
+        mcp_url = str(entry.get("mcpUrl") or "").strip()
+        if not cid or not mcp_url or cid in existing_ids:
+            continue
+        existing_ids.add(cid)
+        AVAILABLE_CONNECTORS.append({
+            "id": cid,
+            "name": str(entry.get("name") or cid),
+            "category": "MCP Directory",
+            "description": str(entry.get("description") or ""),
+            "icon": "plug",
+            "badge": "MCP",
+            "authType": "Remote MCP",
+            "mcpUrl": mcp_url,
+            "website": str(entry.get("website") or mcp_url),
+            "capabilities": ["Remote MCP Tools"],
+            "configFields": [
+                {
+                    "key": "server_url",
+                    "label": "MCP Server URL",
+                    "type": "text",
+                    "required": True,
+                    "default": mcp_url,
+                    "placeholder": mcp_url,
+                },
+                {
+                    "key": "api_key",
+                    "label": "Bearer Token / API Key (optional)",
+                    "type": "password",
+                    "required": False,
+                    "placeholder": "Optional bearer token",
+                },
+            ],
+        })
+
+
+_load_marketplace_mcps()
+
 
 def register_connector(connector: Dict[str, Any]) -> None:
     """Register or update a connector definition."""
@@ -223,6 +277,7 @@ def list_connectors_with_status(
                 if prov and prov not in accounts_by_provider:
                     accounts_by_provider[prov] = acc
     results = []
+    vault = CredentialVault()
 
     for conn in AVAILABLE_CONNECTORS:
         conn_id = conn["id"]
@@ -236,7 +291,6 @@ def list_connectors_with_status(
         except Exception:
             config_dict = {}
 
-        vault = CredentialVault()
         reconnect_required = False
         reconnect_message: Optional[str] = None
         integration_ctx = f"marketplace_connector:{conn_id}"

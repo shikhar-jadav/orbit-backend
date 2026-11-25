@@ -7639,6 +7639,71 @@ async def toggle_skill_endpoint(
     marketplace.list_available_skills(force_refresh=True, chat_store=chat_store, user_id=user_id)
     return {"skill_id": skill_id, "installed": request.install}
 
+async def _sync_marketplace_remote_mcp(
+    user_id: str,
+    connector_id: str,
+    enabled: bool,
+    config: Optional[Dict[str, Any]] = None,
+) -> None:
+    target = next((c for c in marketplace.AVAILABLE_CONNECTORS if c.get("id") == connector_id), None)
+    if not target or not target.get("mcpUrl"):
+        return
+    try:
+        existing_list = chat_store.list_personal_connectors_for_user(user_id)
+    except Exception:
+        existing_list = []
+    existing = next(
+        (
+            item
+            for item in existing_list
+            if (item.get("advanced") or {}).get("marketplace_id") == connector_id
+            or item.get("name") == target["name"]
+        ),
+        None,
+    )
+    if not enabled:
+        if existing:
+            chat_store.update_personal_connector(user_id, existing["id"], is_connected=False)
+            invalidate_mcp_tool_cache(existing["id"])
+        return
+
+    cfg = dict(config or {})
+    mcp_url = str(cfg.get("server_url") or target["mcpUrl"]).strip()
+    api_key = str(cfg.get("api_key") or "").strip()
+    headers_list = [{"key": "Authorization", "value": f"Bearer {api_key}"}] if api_key else []
+    header_map = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    conn_res = await mcp_client.connect_and_list_mcp_tools(mcp_url, custom_headers=header_map)
+    tools = conn_res.get("tools") or []
+    is_connected = bool(conn_res.get("ok"))
+    status_code = conn_res.get("status_code")
+
+    if existing:
+        chat_store.update_personal_connector(
+            user_id,
+            existing["id"],
+            mcp_url=mcp_url,
+            headers=headers_list,
+            tools=tools or existing.get("tools") or [],
+            is_connected=is_connected,
+            last_status_code=status_code,
+        )
+        invalidate_mcp_tool_cache(existing["id"])
+    else:
+        chat_store.create_personal_connector(
+            user_id,
+            name=target["name"],
+            mcp_url=mcp_url,
+            connector_type="remote_mcp",
+            auth_mode="bearer" if api_key else "oauth",
+            headers=headers_list,
+            advanced={"marketplace_id": connector_id},
+            tools=tools,
+            is_connected=is_connected,
+            last_status_code=status_code,
+        )
+
+
 @app.post("/marketplace/connectors/{connector_id}/config")
 @app.post("/api/marketplace/connectors/{connector_id}/config")
 async def configure_connector_endpoint(
@@ -7654,6 +7719,12 @@ async def configure_connector_endpoint(
             request.enabled,
             request.config,
             user_id=current_user["user_id"],
+        )
+        await _sync_marketplace_remote_mcp(
+            current_user["user_id"],
+            connector_id,
+            request.enabled,
+            request.config,
         )
         return result
     except KeyError:
@@ -7690,6 +7761,11 @@ async def toggle_connector_endpoint(
             connector_id,
             request.enabled,
             user_id=current_user["user_id"],
+        )
+        await _sync_marketplace_remote_mcp(
+            current_user["user_id"],
+            connector_id,
+            request.enabled,
         )
         return {
             "connector_id": connector_id,
