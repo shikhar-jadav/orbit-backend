@@ -145,6 +145,8 @@ FRONTEND_DIST_DIR = BASE_DIR / "frontend" / "dist"
 UPLOADS_DIR = BASE_DIR / "data" / "uploads"
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENT_COUNT = 10
+MAX_THREAD_ATTACHMENT_BYTES = 25 * 1024 * 1024
+MAX_THREAD_ATTACHMENT_COUNT = 10
 MAX_ATTACHMENT_CONTEXT_CHARS = 30_000
 MAX_TOTAL_ATTACHMENT_CONTEXT_CHARS = 60_000
 DOCUMENT_TEXT_SPLITTER = RecursiveCharacterTextSplitter(
@@ -1220,6 +1222,9 @@ async def upload_attachment(
     current_user: Dict[str, Any] = Depends(require_user),
 ):
     _require_owned_thread(thread_id, current_user)
+    existing_count, existing_bytes = chat_store.get_thread_attachment_usage(thread_id)
+    if existing_count >= MAX_THREAD_ATTACHMENT_COUNT:
+        raise HTTPException(status_code=422, detail="You can attach up to 10 files per chat.")
     filename = Path(filename).name.strip()
     if not filename or len(filename) > 255 or "\x00" in filename:
         raise HTTPException(status_code=422, detail="Choose a valid file name.")
@@ -1238,6 +1243,8 @@ async def upload_attachment(
             raise HTTPException(status_code=413, detail="Each file must be 25 MB or smaller.")
     if not content:
         raise HTTPException(status_code=422, detail="The selected file is empty.")
+    if existing_bytes + len(content) > MAX_THREAD_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=413, detail="Total files in one chat must be 25 MB or less.")
 
     suffix = Path(filename).suffix.lower()
     content_type = MEDIA_TYPES_BY_EXTENSION.get(suffix)
@@ -6285,8 +6292,8 @@ async def chat_stream_endpoint(
                 attachment["message_id"] is not None for attachment in attachments
             ):
                 raise HTTPException(status_code=422, detail="One or more uploaded files are unavailable.")
-            if sum(item["size_bytes"] for item in attachments) > 50 * 1024 * 1024:
-                raise HTTPException(status_code=413, detail="Files in one message must total 50 MB or less.")
+            if sum(item["size_bytes"] for item in attachments) > MAX_THREAD_ATTACHMENT_BYTES:
+                raise HTTPException(status_code=413, detail="Total files in one chat must be 25 MB or less.")
         attachment_context = attachments
         relevant_attachment_message = attachment_message_for_request(
             thread["messages"], user_message

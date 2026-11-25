@@ -833,6 +833,20 @@ class PostgresChatStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_thread_attachment_usage(self, thread_id: str) -> tuple[int, int]:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS file_count, COALESCE(SUM(size_bytes), 0) AS total_bytes
+                FROM attachments
+                WHERE thread_id = %s
+                """,
+                (thread_id,),
+            ).fetchone()
+        if not row:
+            return 0, 0
+        return int(row["file_count"] or 0), int(row["total_bytes"] or 0)
+
     def attach_to_message(
         self, thread_id: str, message_id: int, attachment_ids: list[str]
     ) -> None:
