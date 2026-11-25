@@ -7646,10 +7646,10 @@ async def _sync_marketplace_remote_mcp(
     connector_id: str,
     enabled: bool,
     config: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> Dict[str, Any]:
     target = next((c for c in marketplace.AVAILABLE_CONNECTORS if c.get("id") == connector_id), None)
     if not target or not target.get("mcpUrl"):
-        return
+        return {}
     try:
         existing_list = chat_store.list_personal_connectors_for_user(user_id)
     except Exception:
@@ -7667,7 +7667,11 @@ async def _sync_marketplace_remote_mcp(
         if existing:
             chat_store.update_personal_connector(user_id, existing["id"], is_connected=False)
             invalidate_mcp_tool_cache(existing["id"])
-        return
+        return {
+            "personal_connector_id": existing["id"] if existing else None,
+            "is_connected": False,
+            "needs_oauth": False,
+        }
 
     cfg = dict(config or {})
     mcp_url = str(cfg.get("server_url") or target["mcpUrl"]).strip()
@@ -7681,18 +7685,19 @@ async def _sync_marketplace_remote_mcp(
     status_code = conn_res.get("status_code")
 
     if existing:
+        personal_connector_id = existing["id"]
         chat_store.update_personal_connector(
             user_id,
-            existing["id"],
+            personal_connector_id,
             mcp_url=mcp_url,
             headers=headers_list,
             tools=tools or existing.get("tools") or [],
             is_connected=is_connected,
             last_status_code=status_code,
         )
-        invalidate_mcp_tool_cache(existing["id"])
+        invalidate_mcp_tool_cache(personal_connector_id)
     else:
-        chat_store.create_personal_connector(
+        created = chat_store.create_personal_connector(
             user_id,
             name=target["name"],
             mcp_url=mcp_url,
@@ -7704,6 +7709,20 @@ async def _sync_marketplace_remote_mcp(
             is_connected=is_connected,
             last_status_code=status_code,
         )
+        personal_connector_id = created["id"]
+
+    if not is_connected:
+        marketplace.toggle_connector_enabled(
+            chat_store, connector_id, False, user_id=user_id
+        )
+
+    return {
+        "personal_connector_id": personal_connector_id,
+        "is_connected": is_connected,
+        "needs_oauth": not is_connected,
+        "status_code": status_code,
+        "tools_count": len(tools),
+    }
 
 
 @app.post("/marketplace/connectors/{connector_id}/config")
@@ -7764,15 +7783,16 @@ async def toggle_connector_endpoint(
             request.enabled,
             user_id=current_user["user_id"],
         )
-        await _sync_marketplace_remote_mcp(
+        sync_result = await _sync_marketplace_remote_mcp(
             current_user["user_id"],
             connector_id,
             request.enabled,
         )
         return {
             "connector_id": connector_id,
-            "enabled": request.enabled,
+            "enabled": sync_result.get("is_connected", request.enabled) if sync_result else request.enabled,
             "github_disconnected": github_disconnected,
+            **(sync_result or {}),
         }
     except KeyError:
         raise HTTPException(status_code=404, detail="Connector not found.")

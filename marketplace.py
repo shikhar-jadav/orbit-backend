@@ -92,23 +92,7 @@ def _load_marketplace_mcps() -> None:
             "mcpUrl": mcp_url,
             "website": str(entry.get("website") or mcp_url),
             "capabilities": ["Remote MCP Tools"],
-            "configFields": [
-                {
-                    "key": "server_url",
-                    "label": "MCP Server URL",
-                    "type": "text",
-                    "required": True,
-                    "default": mcp_url,
-                    "placeholder": mcp_url,
-                },
-                {
-                    "key": "api_key",
-                    "label": "Bearer Token / API Key (optional)",
-                    "type": "password",
-                    "required": False,
-                    "placeholder": "Optional bearer token",
-                },
-            ],
+            "configFields": [],
         })
 
 
@@ -276,6 +260,15 @@ def list_connectors_with_status(
                 prov = str(acc.get("provider") or "")
                 if prov and prov not in accounts_by_provider:
                     accounts_by_provider[prov] = acc
+    personal_by_marketplace_id: dict[str, dict[str, Any]] = {}
+    if chat_store is not None and user_id:
+        try:
+            for item in chat_store.list_personal_connectors_for_user(user_id):
+                mid = (item.get("advanced") or {}).get("marketplace_id")
+                if mid:
+                    personal_by_marketplace_id[str(mid)] = item
+        except Exception:
+            pass
     results = []
     vault = CredentialVault()
 
@@ -341,11 +334,17 @@ def list_connectors_with_status(
             except Exception:
                 pass
 
-        is_authenticated = (
-            (bool(connected_account) and not oauth_reconnect_required)
-            if oauth_provider
-            else True
-        )
+        if conn.get("mcpUrl") and user_id:
+            personal = personal_by_marketplace_id.get(conn_id)
+            is_connected_remote = bool(personal and personal.get("is_connected"))
+            is_enabled = is_connected_remote
+            is_authenticated = is_connected_remote
+        else:
+            is_authenticated = (
+                (bool(connected_account) and not oauth_reconnect_required)
+                if oauth_provider
+                else True
+            )
         status = (
             "active"
             if (is_enabled and is_configured and is_authenticated and not reconnect_required)
