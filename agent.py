@@ -25,6 +25,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from config_manager import RoundRobinProviderManager, ProviderConfig
 from tools import AGENT_TOOLS, ALL_AGENT_TOOLS, WORKSPACE_AGENT_TOOLS
 import policy_engine
+from mcp_tool_search import rank_mcp_tools
 
 
 
@@ -343,16 +344,18 @@ Supported actions:
    - If the user changes an earlier preference, contradicts an old rule, or requests deletion, update or delete the old entry immediately with `action="delete"` or `action="update"`.
 
 # 9. External Services and Integrations
-Use `search_available_tools` with specific action/topic keywords (e.g., "commit", "file", "issue", "pull request", "email") to discover and load connected MCP tools when an external service or integration is required.
+Use `search_available_tools` with a concise action-oriented query to discover connected MCP tools when an external service is required. The connected-services directory is only a lightweight service index, not a list of executable tools.
 
 Operating procedure:
-1. Identify the external service and required capability.
-2. Check whether the required tool is already available.
-3. If unavailable, use `search_available_tools` to discover it.
-4. Inspect the discovered tool's description and parameters.
-5. Load and execute the appropriate tool.
-6. Validate the returned result.
-7. Summarize what was actually accomplished.
+1. Identify the service and exact capability needed.
+2. Call `search_available_tools` with a short query such as "GitHub create issue" and, when known, the `service` filter (for example, "GitHub").
+3. Review returned tool names, descriptions, and complete input schemas.
+4. Use only a discovered tool and provide arguments matching its schema exactly.
+5. If no suitable tool is found, refine the query or search another connected service.
+6. Keep discovered tools available for the current task; do not rediscover them unnecessarily.
+7. Validate the result and summarize what was actually accomplished.
+
+Never assume a tool exists without discovering it. Never invent tool names or arguments. The default search returns six relevant tools, not an absolute limit.
 
 Guidelines:
 - Discover integrations on demand rather than loading everything.
@@ -1154,7 +1157,7 @@ class ReActAgent:
                             suffix += 1
                             bound_name = f"{safe_base[:42]}_{suffix}"
                         used_names.add(bound_name)
-                        params = _compact_tool_schema(mcp_client.sanitize_tool_schema(tool_def.get("inputSchema")))
+                        params = mcp_client.sanitize_tool_schema(tool_def.get("inputSchema"))
                         desc = str(tool_def.get("description") or raw_name)[:1000]
                         full_desc = (
                             f"[Connector '{conn['name']}' - Requires approval before execution] {desc}"
@@ -1197,8 +1200,21 @@ class ReActAgent:
                     mcp_tool_handlers[t_entry["raw_name"]] = (t_entry["conn"], t_entry["raw_name"], t_entry["perm"])
                     mcp_tool_handlers[t_entry["raw_name"].replace("-", "_")] = (t_entry["conn"], t_entry["raw_name"], t_entry["perm"])
                     mcp_tool_handlers[t_entry["raw_name"].replace("_", "-")] = (t_entry["conn"], t_entry["raw_name"], t_entry["perm"])
-            except Exception:
-                pass
+            except Exception as connector_load_error:
+                print(f"[agent] MCP connector catalog load skipped: {connector_load_error}")
+
+        connected_services = sorted({
+            str(entry.get("connector_name", "")).strip()
+            for entry in all_catalog_tools.values()
+            if str(entry.get("connector_name", "")).strip()
+        })
+        if connected_services:
+            active_prompt += (
+                "\n\n### Connected MCP Services (discovery directory)\n"
+                "These services are connected. Their tools are not loaded unless shown in the active tool list. "
+                "Use search_available_tools with a concise action query and matching service filter to discover the required capability.\n"
+                + "\n".join(f"- {name}" for name in connected_services[:30])
+            )
 
         if approved_tools:
             active_prompt += (
@@ -1397,48 +1413,16 @@ class ReActAgent:
                     # Execute tool (local ReAct tool or connected personal MCP tool)
                     tool_func = self.tools_by_name.get(tool_name)
                     if tool_name == "search_available_tools":
-                        query = str(tool_args.get("query", "") if isinstance(tool_args, dict) else "").strip().lower()
-                        raw_limit = int(tool_args.get("limit", 10) if isinstance(tool_args, dict) else 10)
-                        limit = max(1, min(raw_limit, 20))
-                        query_words = [w for w in re.split(r"\W+", query) if len(w) > 1]
-
-                        scored_tools = []
-                        for b_name, t_entry in all_catalog_tools.items():
-                            c_name = t_entry["connector_name"].lower()
-                            r_name = t_entry["raw_name"].lower()
-                            t_desc = t_entry["description"].lower()
-
-                            score = 0
-                            if c_name in query or query in c_name:
-                                score += 20
-                            if r_name in query or query in r_name:
-                                score += 25
-                            for word in query_words:
-                                if word in c_name:
-                                    score += 10
-                                if word in r_name:
-                                    score += 8
-                                if word in t_desc:
-                                    score += 3
-                            if score > 0 or not query_words:
-                                scored_tools.append((score, t_entry))
-
-                        # Prefer higher match score, and break ties in favor of read-only tools first.
-                        scored_tools.sort(
-                            key=lambda x: (
-                                x[0],
-                                1 if x[1].get("perm") == "allow" else 0,
-                            ),
-                            reverse=True,
+                        query = str(tool_args.get("query", "") if isinstance(tool_args, dict) else "").strip()
+                        service_filter = str(tool_args.get("service", "") if isinstance(tool_args, dict) else "").strip()
+                        raw_limit = int(tool_args.get("limit", 6) if isinstance(tool_args, dict) else 6)
+                        limit = max(1, min(raw_limit, 8))
+                        matched = rank_mcp_tools(
+                            query=query,
+                            tools=list(all_catalog_tools.values()),
+                            service=service_filter or None,
+                            limit=limit,
                         )
-                        matched = [t for _, t in scored_tools[:max(1, limit)]]
-
-                        if not matched and all_catalog_tools and query_words:
-                            for b_name, t_entry in all_catalog_tools.items():
-                                if any(w in t_entry["connector_name"].lower() for w in query_words):
-                                    matched.append(t_entry)
-                                    if len(matched) >= limit:
-                                        break
 
                         # Dynamically activate matched tools for subsequent turns!
                         for t in matched:
@@ -1475,14 +1459,13 @@ class ReActAgent:
                                 for ct in c_tools:
                                     s_desc = ct["description"][:80].strip()
                                     lines.append(f"    - {ct['raw_name']}: {s_desc}")
-                                remaining = [
-                                    t["raw_name"]
-                                    for b, t in all_catalog_tools.items()
+                                remaining_count = sum(
+                                    1 for b, t in all_catalog_tools.items()
                                     if t["connector_name"] == c_name and b not in matched_names
-                                ]
-                                if remaining:
+                                )
+                                if remaining_count:
                                     lines.append(
-                                        f"    (More {c_name} tools available via search_available_tools: {', '.join(remaining[:25])})"
+                                        f"    ({remaining_count} additional tools available; refine search_available_tools if needed)"
                                     )
 
                             tool_result = "\n".join(lines)
