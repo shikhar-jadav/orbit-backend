@@ -1284,6 +1284,44 @@ async def upload_attachment(
     return attachment
 
 
+@app.get("/threads/{thread_id}/attachments/{attachment_id}")
+async def get_attachment_file(
+    thread_id: str,
+    attachment_id: str,
+    download: bool = False,
+    current_user: Dict[str, Any] = Depends(require_user),
+):
+    _require_owned_thread(thread_id, current_user)
+    records = chat_store.get_attachments(thread_id, [attachment_id])
+    if not records:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    attachment = records[0]
+    object_key = attachment["storage_name"]
+    content: Optional[bytes] = None
+    try:
+        content = _get_object_storage().get_bytes(object_key)
+    except Exception:
+        fallback_path = UPLOADS_DIR / Path(object_key).name
+        if fallback_path.exists():
+            content = fallback_path.read_bytes()
+        elif (UPLOADS_DIR / object_key).exists():
+            content = (UPLOADS_DIR / object_key).read_bytes()
+    if content is None:
+        raise HTTPException(status_code=404, detail="Attachment file not found.")
+
+    filename = Path(str(attachment.get("filename") or "attachment")).name.replace('"', "")
+    content_type = str(attachment.get("content_type") or "application/octet-stream")
+    disposition = "attachment" if download else "inline"
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
 def build_attachment_input(attachments: list[dict[str, Any]], message: str) -> Any:
     text_parts = [message]
     media_parts = []
