@@ -245,7 +245,7 @@ class RoundRobinProviderManager:
             "temperature": temperature,
             "streaming": streaming,
             "max_retries": 0,
-            "request_timeout": 90.0,
+            "request_timeout": float(os.getenv("LLM_REQUEST_TIMEOUT", "180.0") or "180.0"),
             **kwargs,
         }
 
