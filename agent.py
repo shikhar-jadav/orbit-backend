@@ -25,7 +25,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from config_manager import RoundRobinProviderManager, ProviderConfig
 from tools import AGENT_TOOLS, ALL_AGENT_TOOLS, WORKSPACE_AGENT_TOOLS
 import policy_engine
-from mcp_tool_search import rank_mcp_tools
+from mcp_tool_search import get_cached_sanitized_schema, rank_mcp_tools, validate_mcp_tool_args
 
 
 
@@ -1157,7 +1157,12 @@ class ReActAgent:
                             suffix += 1
                             bound_name = f"{safe_base[:42]}_{suffix}"
                         used_names.add(bound_name)
-                        params = mcp_client.sanitize_tool_schema(tool_def.get("inputSchema"))
+                        params = get_cached_sanitized_schema(
+                            str(conn.get("id") or conn.get("name") or ""),
+                            raw_name,
+                            tool_def.get("inputSchema"),
+                            mcp_client.sanitize_tool_schema,
+                        )
                         desc = str(tool_def.get("description") or raw_name)[:1000]
                         full_desc = (
                             f"[Connector '{conn['name']}' - Requires approval before execution] {desc}"
@@ -1213,7 +1218,10 @@ class ReActAgent:
                 "\n\n### Connected MCP Services (discovery directory)\n"
                 "These services are connected. Their tools are not loaded unless shown in the active tool list. "
                 "Use search_available_tools with a concise action query and matching service filter to discover the required capability.\n"
-                + "\n".join(f"- {name}" for name in connected_services[:30])
+                                + "\n".join(
+                    f"- {name} ({sum(1 for e in all_catalog_tools.values() if e.get('connector_name') == name)} tools)"
+                    for name in connected_services[:30]
+                )
             )
 
         if approved_tools:
@@ -1457,8 +1465,12 @@ class ReActAgent:
                             for c_name, c_tools in by_conn.items():
                                 lines.append(f"  {c_name} ({len(c_tools)}):")
                                 for ct in c_tools:
-                                    s_desc = ct["description"][:80].strip()
-                                    lines.append(f"    - {ct['raw_name']}: {s_desc}")
+                                    s_desc = ct["description"][:200].strip()
+                                    req_fields = ct.get("params", {}).get("required") or []
+                                    req_hint = f" [required: {', '.join(req_fields)}]" if req_fields else ""
+                                    perm_hint = " [approval required]" if ct.get("perm") == "approval" else ""
+                                    alias_hint = f" (call as {ct['bound_name']})" if ct.get("bound_name") != ct.get("raw_name") else ""
+                                    lines.append(f"    - {ct['raw_name']}{alias_hint}{perm_hint}: {s_desc}{req_hint}")
                                 remaining_count = sum(
                                     1 for b, t in all_catalog_tools.items()
                                     if t["connector_name"] == c_name and b not in matched_names
@@ -1721,6 +1733,19 @@ class ReActAgent:
                                     tool_result = f"Error executing {tool_name}: {exc}"
                     elif tool_name in mcp_tool_handlers:
                         conn, raw_mcp_name, cached_perm = mcp_tool_handlers[tool_name]
+                        mcp_precheck_error = None
+                        if not conn.get("is_connected") or conn.get("reconnect_required"):
+                            mcp_precheck_error = (
+                                f"MCP connector '{conn.get('name', 'unknown')}' is disconnected or requires reconnection. "
+                                "Ask the user to reconnect it in Settings > Connected Accounts."
+                            )
+                        else:
+                            tool_schema = (
+                                (active_mcp_tools.get(tool_name) or all_catalog_tools.get(tool_name) or {}).get("params")
+                            )
+                            arg_err = validate_mcp_tool_args(tool_args, tool_schema)
+                            if arg_err:
+                                mcp_precheck_error = f"Invalid arguments for {raw_mcp_name}: {arg_err}"
                         live_perms = dict(conn.get("tool_permissions") or {})
                         perm = (
                             live_perms.get(raw_mcp_name)
@@ -1746,7 +1771,9 @@ class ReActAgent:
                             approved_tools=approved_tools,
                         )
 
-                        if p_dec.blocked:
+                        if mcp_precheck_error:
+                            tool_result = mcp_precheck_error
+                        elif p_dec.blocked:
                             tool_result = f"Action blocked: {p_dec.reason}"
                         elif p_dec.requires_approval or force_approval:
                             approval = _start_action_approval(

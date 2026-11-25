@@ -67,6 +67,7 @@ from psycopg.rows import dict_row
 import auth
 import marketplace
 import mcp_client
+from mcp_tool_search import invalidate_mcp_tool_cache
 import github_mcp_client
 import gmail_mcp_server
 import skill_security
@@ -4850,6 +4851,7 @@ async def update_personal_connector(
         raise HTTPException(status_code=503, detail=str(exc))
     if not updated:
         raise HTTPException(status_code=404, detail="Connector not found.")
+    invalidate_mcp_tool_cache(connector_id)
     return updated
 
 
@@ -4911,6 +4913,7 @@ async def delete_personal_connector(
     deleted = chat_store.delete_personal_connector(current_user["user_id"], connector_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Connector not found.")
+    invalidate_mcp_tool_cache(connector_id)
     return {"ok": True}
 
 
