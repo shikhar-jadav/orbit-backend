@@ -163,18 +163,20 @@ def ask_question(questions: list) -> str:
 
 
 @tool
-def search_available_tools(query: str, limit: int = 5) -> str:
+def search_available_tools(query: str, service: str = "", limit: int = 6) -> str:
     """
-    Search and dynamically load available tools from connected MCP connectors (e.g. Notion, LangChain, Google Drive, GitHub, etc.) and personal skills.
-    Use this tool whenever the user asks about external services, workspaces, files, databases, or capabilities not currently in your active tool list.
+    Search and dynamically load relevant tools from connected MCP services.
+    Use concise action-oriented queries such as 'GitHub create issue' or 'Gmail search messages'.
     Args:
-        query: Keywords describing the desired action or service (e.g., 'notion search pages', 'notion databases', 'read notion page').
-        limit: Maximum number of relevant tools to match and load (default: 5).
+        query: Short description of the required capability and action.
+        service: Optional connected service filter, such as 'GitHub' or 'Gmail'.
+        limit: Maximum number of tools to load initially (default: 6; runtime caps this at 8).
     """
     import json
     return json.dumps({
         "status": "search_tools",
         "query": query,
+        "service": service,
         "limit": limit,
     }, ensure_ascii=False)
 
