@@ -6347,6 +6347,7 @@ async def chat_stream_endpoint(
                 target_user_id=user_id,
                 chat_store=chat_store,
                 active_interrupts=ACTIVE_CHAT_INTERRUPTS,
+                active_interrupt_owners=ACTIVE_CHAT_INTERRUPT_OWNERS,
             ):
                 event_type = event.get("type")
                 data = event.get("data", {})
@@ -6574,6 +6575,7 @@ async def regenerate_chat_endpoint(
                 target_user_id=user_id,
                 chat_store=chat_store,
                 active_interrupts=ACTIVE_CHAT_INTERRUPTS,
+                active_interrupt_owners=ACTIVE_CHAT_INTERRUPT_OWNERS,
             ):
                 event_type = event.get("type")
                 data = event.get("data", {})
