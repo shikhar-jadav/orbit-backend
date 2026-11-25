@@ -67,6 +67,11 @@ from psycopg.rows import dict_row
 import auth
 import marketplace
 import mcp_client
+from attachment_rag import (
+    LARGE_ATTACHMENT_RAG_THRESHOLD_CHARS,
+    index_attachment_chunks,
+    retrieve_relevant_chunks,
+)
 from mcp_tool_search import invalidate_mcp_tool_cache
 import github_mcp_client
 import gmail_mcp_server
@@ -1281,6 +1286,28 @@ async def upload_attachment(
     except Exception as save_err:
         print(f"[Upload] Warning: failed to save to workspace inputs: {save_err}")
 
+    if extracted_text and len(extracted_text) > LARGE_ATTACHMENT_RAG_THRESHOLD_CHARS:
+        try:
+            doc_chunks = [
+                c.page_content
+                for c in DOCUMENT_TEXT_SPLITTER.split_documents(
+                    [Document(page_content=extracted_text, metadata={"source": filename})]
+                )
+                if c.page_content.strip()
+            ]
+            q_store = getattr(memory_store, "qdrant_vector", None) if memory_store else None
+            await asyncio.to_thread(
+                index_attachment_chunks,
+                thread_id=thread_id,
+                attachment_id=attachment_id,
+                user_id=current_user["user_id"],
+                filename=filename,
+                chunks=doc_chunks,
+                qdrant_store=q_store,
+            )
+        except Exception as rag_err:
+            print(f"[Upload] Warning: attachment RAG indexing skipped: {rag_err}")
+
     return attachment
 
 
@@ -1339,9 +1366,22 @@ def build_attachment_input(attachments: list[dict[str, Any]], message: str) -> A
                         )
                     ]
                 )
-                excerpt = "\n\n".join(chunk.page_content for chunk in chunks)
-                excerpt = excerpt[:remaining_context]
-                text_parts.append(f"Attached document: {filename}\n{excerpt}")
+                chunk_texts = [chunk.page_content for chunk in chunks if chunk.page_content.strip()]
+                if len(extracted_text) > LARGE_ATTACHMENT_RAG_THRESHOLD_CHARS and chunk_texts:
+                    q_store = getattr(memory_store, "qdrant_vector", None) if memory_store else None
+                    excerpt = retrieve_relevant_chunks(
+                        query=message,
+                        filename=filename,
+                        chunks=chunk_texts,
+                        thread_id=attachment.get("thread_id"),
+                        attachment_id=attachment.get("attachment_id"),
+                        max_chars=remaining_context,
+                        qdrant_store=q_store,
+                    )
+                    text_parts.append(excerpt)
+                else:
+                    excerpt = "\n\n".join(chunk_texts)[:remaining_context]
+                    text_parts.append(f"Attached document: {filename}\n{excerpt}")
                 remaining_context -= len(excerpt)
             if attachment["content_type"] == "application/pdf":
                 if extracted_text:
