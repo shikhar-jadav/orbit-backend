@@ -188,7 +188,34 @@ def test_marketplace_e2e_lifecycle_and_user_isolation(monkeypatch):
         assert diag["tools_count"] == 1
         assert diag["tools"][0]["name"] == "search_pages"
 
+        # A transport failure is not an OAuth challenge and must not trigger
+        # the browser authentication flow.
+        async def failed_probe(url, custom_headers=None, timeout=12.0, **kwargs):
+            return {
+                "ok": False,
+                "status_code": None,
+                "tools": [],
+                "error": "Timed out while connecting to the MCP server.",
+            }
+
+        monkeypatch.setattr(mcp_client, "connect_and_list_mcp_tools", failed_probe)
+        current_user_box["user"] = {"user_id": "user-c", "email": "c@orbit.test"}
+        timeout_res = client.post("/api/marketplace/connectors/notion/toggle", json={"enabled": True})
+        assert timeout_res.status_code == 200
+        assert timeout_res.json()["is_connected"] is False
+        assert timeout_res.json()["needs_oauth"] is False
+        assert "Timed out" in timeout_res.json()["error"]
+
         # 7. Per-user isolation: User B cannot access or disconnect User A's connector
+        async def auth_probe(url, custom_headers=None, timeout=12.0, **kwargs):
+            return {
+                "ok": False,
+                "status_code": 401,
+                "tools": [],
+                "error": "Authentication rejected by MCP server.",
+            }
+
+        monkeypatch.setattr(mcp_client, "connect_and_list_mcp_tools", auth_probe)
         current_user_box["user"] = {"user_id": "user-b", "email": "b@orbit.test"}
         res_b_disc = client.post(f"/api/settings/personal-connectors/{pid}/disconnect")
         assert res_b_disc.status_code == 404

@@ -7834,7 +7834,10 @@ async def _sync_marketplace_remote_mcp(
     return {
         "personal_connector_id": personal_connector_id,
         "is_connected": is_connected,
-        "needs_oauth": not is_connected,
+        # A failed connection is not necessarily an auth failure (it may be a
+        # timeout, unsupported transport, bad URL, or server error). Let the
+        # client start OAuth only after a 401/403 challenge.
+        "needs_oauth": status_code in (401, 403),
         "status_code": status_code,
         "tools_count": len(tools),
         "tools": tools,
