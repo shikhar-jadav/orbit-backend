@@ -6648,5 +6648,1825 @@
     "description": "View transactions, settlements, stores, POS support, and PineAI workflows from your Pine Labs One merchant account.",
     "mcpUrl": "https://onemcp.pinelabs.com/sse",
     "website": "https://claude.com/marketplace/connectors/pinelabs-one"
+  },
+  {
+    "id": "salesforce-headless-360",
+    "name": "Salesforce - Beta",
+    "description": "Sell, serve, and operate at scale with Salesforce.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/salesforce-headless-360"
+  },
+  {
+    "id": "datadog",
+    "name": "Datadog",
+    "description": "Debug and resolve issues using Datadog telemetry",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/datadog"
+  },
+  {
+    "id": "oracle-netsuite",
+    "name": "NetSuite",
+    "description": "Connect Claude to NetSuite data for analysis & insights",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/oracle-netsuite"
+  },
+  {
+    "id": "smartsheet",
+    "name": "Smartsheet",
+    "description": "Analyze and manage Smartsheet data with Claude",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/smartsheet"
+  },
+  {
+    "id": "snowflake",
+    "name": "Snowflake",
+    "description": "Retrieve both structured and unstructured data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/snowflake"
+  },
+  {
+    "id": "n8n",
+    "name": "n8n",
+    "description": "Access and run your n8n workflows",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/n8n"
+  },
+  {
+    "id": "amplitude",
+    "name": "Amplitude",
+    "description": "Search, access, and get insights on your Amplitude data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/amplitude"
+  },
+  {
+    "id": "servicenow",
+    "name": "ServiceNow",
+    "description": "Trigger, automate, and orchestrate enterprise workflows",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/servicenow"
+  },
+  {
+    "id": "zoho-crm",
+    "name": "Zoho CRM",
+    "description": "MCP Server for Zoho CRM Workflows",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zoho-crm"
+  },
+  {
+    "id": "pendo",
+    "name": "Pendo",
+    "description": "Connect to Pendo for product and user insights",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/pendo"
+  },
+  {
+    "id": "ironclad",
+    "name": "Ironclad Contracts",
+    "description": "Plain language search for faster contract answers and manage your contractual obligations",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ironclad"
+  },
+  {
+    "id": "harvey",
+    "name": "Harvey",
+    "description": "Answer legal queries, search vaults, and research",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/harvey"
+  },
+  {
+    "id": "aws-mcp",
+    "name": "AWS MCP",
+    "description": "Give agents secure access to AWS via MCP",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/aws-mcp"
+  },
+  {
+    "id": "freshservice",
+    "name": "Freshservice",
+    "description": "Manage tickets, assets, changes, and IT requests",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/freshservice"
+  },
+  {
+    "id": "sigma",
+    "name": "Sigma",
+    "description": "Query, search, and explore your data with Sigma",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sigma"
+  },
+  {
+    "id": "metabase",
+    "name": "Metabase",
+    "description": "Query and explore your Metabase data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/metabase"
+  },
+  {
+    "id": "workato",
+    "name": "Workato",
+    "description": "Automate workflows and connect your business apps",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/workato"
+  },
+  {
+    "id": "hex",
+    "name": "Hex",
+    "description": "Answer questions with the Hex agent",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/hex"
+  },
+  {
+    "id": "zoho-books",
+    "name": "Zoho Books",
+    "description": "Zoho Books MCP for Smart Finance Ops",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zoho-books"
+  },
+  {
+    "id": "pigment",
+    "name": "Pigment",
+    "description": "Analyze business data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/pigment"
+  },
+  {
+    "id": "zoho-desk",
+    "name": "Zoho Desk",
+    "description": "Zoho Desk MCP for Customer Support Automation",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zoho-desk"
+  },
+  {
+    "id": "articulate",
+    "name": "Articulate",
+    "description": "Build interactive training right from Claude",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/articulate"
+  },
+  {
+    "id": "square",
+    "name": "Square",
+    "description": "Search and manage transaction, merchant, and payment data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/square"
+  },
+  {
+    "id": "customer-io",
+    "name": "Customer.io",
+    "description": "Create automations, segments, and emails, analyze campaign performance, and manage customer data in your Customer.io workspace.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/customer-io"
+  },
+  {
+    "id": "braze",
+    "name": "Braze",
+    "description": "Braze Marketers can use this connector to answer questions, analyze trends, and provide insights.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/braze"
+  },
+  {
+    "id": "fellow-ai",
+    "name": "Fellow.ai",
+    "description": "Chat with your meetings to uncover actionable insights",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/fellow-ai"
+  },
+  {
+    "id": "alltrails",
+    "name": "AllTrails",
+    "description": "Find your next hike",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/alltrails"
+  },
+  {
+    "id": "meltwater",
+    "name": "Meltwater",
+    "description": "Search and analyze billions of news articles and social posts",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/meltwater"
+  },
+  {
+    "id": "alphaxiv",
+    "name": "alphaXiv",
+    "description": "Fast search and full-text access over arXiv pre-prints",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/alphaxiv"
+  },
+  {
+    "id": "adspirer-ads-performance-marketing-agent",
+    "name": "Adspirer Ads & Performance Marketing Agent",
+    "description": "PPC, paid social and retail media agent: ad management, optimization and reporting across Google Ads, Meta, TikTok Ads, LinkedIn, Amazon, Bing, Walmart and ChatGPT Ads, plus GA4 and Search Console.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/adspirer-ads-performance-marketing-agent"
+  },
+  {
+    "id": "grafana-cloud",
+    "name": "Grafana Cloud",
+    "description": "Query metrics, logs, and traces and manage dashboards and alerts",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/grafana-cloud"
+  },
+  {
+    "id": "crossbeam",
+    "name": "Crossbeam",
+    "description": "Explore partner data and ecosystem insights in Claude",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/crossbeam"
+  },
+  {
+    "id": "neon",
+    "name": "Neon",
+    "description": "Postgres, Object Storage, Managed Better Auth, and more",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/neon"
+  },
+  {
+    "id": "dataverse",
+    "name": "Microsoft Dataverse",
+    "description": "Query, create, update, and search your Dataverse data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/dataverse"
+  },
+  {
+    "id": "gainsight-cs",
+    "name": "Gainsight (CS)",
+    "description": "Query, write back and automate with real-time CS data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/gainsight-cs"
+  },
+  {
+    "id": "seismic",
+    "name": "Seismic",
+    "description": "Connect Claude to Seismic MCP for generative search",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/seismic"
+  },
+  {
+    "id": "glean",
+    "name": "Glean",
+    "description": "Bring enterprise context to Claude and your AI tools",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/glean"
+  },
+  {
+    "id": "zoho-projects",
+    "name": "Zoho Projects",
+    "description": "Zoho Projects MCP for Task & Project Automation",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zoho-projects"
+  },
+  {
+    "id": "databricks",
+    "name": "Databricks Genie",
+    "description": "Ground your agent in Genie's trusted data insights.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/databricks"
+  },
+  {
+    "id": "bamboohr",
+    "name": "BambooHR",
+    "description": "Look up employees, check time off, run reports, and manage goals and hiring",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/bamboohr"
+  },
+  {
+    "id": "dbt",
+    "name": "dbt",
+    "description": "Explore, query, and build with dbt projects",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/dbt"
+  },
+  {
+    "id": "qlik",
+    "name": "Qlik",
+    "description": "Unlock the power of your trusted data from Qlik",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/qlik"
+  },
+  {
+    "id": "activecampaign",
+    "name": "ActiveCampaign",
+    "description": "Create and send campaigns, build automations, automate reporting, and analyze performance",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/activecampaign"
+  },
+  {
+    "id": "funnel",
+    "name": "Funnel",
+    "description": "Cross-channel marketing analytics across 600+ connectors",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/funnel"
+  },
+  {
+    "id": "coralogix",
+    "name": "Coralogix",
+    "description": "Explore and debug your Coralogix observability data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/coralogix"
+  },
+  {
+    "id": "netdocuments",
+    "name": "NetDocuments",
+    "description": "Securely access your documents in NetDocuments",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/netdocuments"
+  },
+  {
+    "id": "brightflag",
+    "name": "Brightflag",
+    "description": "Connect to Brightflag to interact with matter, vendor and spend data within Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/brightflag"
+  },
+  {
+    "id": "sourcegraph",
+    "name": "Sourcegraph",
+    "description": "Give Claude full enterprise-scale codebase context.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sourcegraph"
+  },
+  {
+    "id": "retool",
+    "name": "Retool",
+    "description": "Build production apps and manage Retool with AI agents",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/retool"
+  },
+  {
+    "id": "tines",
+    "name": "Tines",
+    "description": "Securely deploy servers in a matter of seconds in Tines",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/tines"
+  },
+  {
+    "id": "chargebee",
+    "name": "Chargebee",
+    "description": "Live billing intelligence for your revenue team",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/chargebee"
+  },
+  {
+    "id": "benchling",
+    "name": "Benchling",
+    "description": "Access Benchling's scientific AI for research in Claude",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/benchling"
+  },
+  {
+    "id": "port-io",
+    "name": "Port IO",
+    "description": "Search your context lake and safely run actions",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/port-io"
+  },
+  {
+    "id": "sprinto-mcp-plugins",
+    "name": "Sprinto MCP",
+    "description": "Manage trust workflows",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sprinto-mcp-plugins"
+  },
+  {
+    "id": "everlaw",
+    "name": "Everlaw",
+    "description": "Search and explore your Everlaw database in Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/everlaw"
+  },
+  {
+    "id": "youtrack",
+    "name": "YouTrack",
+    "description": "Plan and track work in YouTrack",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/youtrack"
+  },
+  {
+    "id": "celigo",
+    "name": "Celigo",
+    "description": "Build and manage automations across hundreds of apps",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/celigo"
+  },
+  {
+    "id": "ontra",
+    "name": "Ontra",
+    "description": "Query your Ontra data directly from any AI tool",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ontra"
+  },
+  {
+    "id": "samsara-mcp",
+    "name": "Samsara",
+    "description": "Ask Claude about your fleet and get answers from live Samsara data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/samsara-mcp"
+  },
+  {
+    "id": "spotdraft",
+    "name": "SpotDraft",
+    "description": "Search, review, and manage contracts from your SpotDraft workspace, right inside Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/spotdraft"
+  },
+  {
+    "id": "attentive",
+    "name": "Attentive",
+    "description": "Attentive, inside the AI tools you already use.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/attentive"
+  },
+  {
+    "id": "datagrail",
+    "name": "DataGrail",
+    "description": "Secure, production-ready AI orchestration for privacy",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/datagrail"
+  },
+  {
+    "id": "wingify",
+    "name": "Wingify",
+    "description": "Optimize digital experiences directly from Claude and supercharge your CRO workflow.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/wingify"
+  },
+  {
+    "id": "docuseal",
+    "name": "DocuSeal",
+    "description": "Sign, send & manage documents with DocuSeal",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/docuseal"
+  },
+  {
+    "id": "collibra",
+    "name": "Collibra",
+    "description": "Context and control for AI.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/collibra"
+  },
+  {
+    "id": "loopio",
+    "name": "Loopio",
+    "description": "Search approved response content, answer entire RFPs, and manage projects effortlessly.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/loopio"
+  },
+  {
+    "id": "zohomail",
+    "name": "Zoho Mail",
+    "description": "Zoho Mail MCP Server lets AI assistants access and manage emails using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohomail"
+  },
+  {
+    "id": "bigin-zohomcp-com",
+    "name": "Bigin by Zoho CRM",
+    "description": "Simplify sales and customer management for small businesses",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/bigin-zohomcp-com"
+  },
+  {
+    "id": "filesystem",
+    "name": "Filesystem",
+    "description": "Let Claude access your filesystem to read and write files.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/filesystem"
+  },
+  {
+    "id": "workday",
+    "name": "Sana from Workday",
+    "description": "Bring Workday agents, data, and actions into Claude",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/workday"
+  },
+  {
+    "id": "loomi-connect",
+    "name": "Loomi Connect",
+    "description": "Bloomreach's layer for exposing commerce intelligence, marketing, analytics, and search.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/loomi-connect"
+  },
+  {
+    "id": "control-chrome",
+    "name": "Control Chrome",
+    "description": "Control Google Chrome browser tabs, windows, and navigation",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/control-chrome"
+  },
+  {
+    "id": "vani",
+    "name": "Vani by Zoho",
+    "description": "Create diagrams, visualize workflows, and manage Spaces in Vani.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/vani"
+  },
+  {
+    "id": "tray-ai",
+    "name": "Tray.ai",
+    "description": "Automate 700+ apps & workflows with governance",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/tray-ai"
+  },
+  {
+    "id": "pdf-viewer-5f8ba9",
+    "name": "pdf-viewer",
+    "description": "Read, annotate, and interact with PDF files — interactive viewer with search, navigation, annotations, form filling, and text extraction",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/pdf-viewer-5f8ba9"
+  },
+  {
+    "id": "catalyst-by-zoho",
+    "name": "Catalyst by Zoho",
+    "description": "Build, deploy and host apps.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/catalyst-by-zoho"
+  },
+  {
+    "id": "hebbia",
+    "name": "Hebbia",
+    "description": "AI for financial rigor",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/hebbia"
+  },
+  {
+    "id": "elastic-cloud-serverless",
+    "name": "Elastic Cloud Serverless",
+    "description": "Search, Observe, and Protect your Elasticsearch Data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/elastic-cloud-serverless"
+  },
+  {
+    "id": "visier",
+    "name": "Visier",
+    "description": "Find people, productivity and business impact insights",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/visier"
+  },
+  {
+    "id": "starburst",
+    "name": "Starburst",
+    "description": "Securely retrieve data from your federated data sources",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/starburst"
+  },
+  {
+    "id": "jupiterone",
+    "name": "JupiterOne",
+    "description": "Ask questions about your JupiterOne agentic security and it asset graph and manage alerts, rules, and dashboards — in natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/jupiterone"
+  },
+  {
+    "id": "zoho-show",
+    "name": "Zoho Show",
+    "description": "Create, edit and manage presentation decks",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zoho-show"
+  },
+  {
+    "id": "dagster-mcp",
+    "name": "Dagster+ MCP",
+    "description": "Investigate issues and take action in your Dagster+ deployment from Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/dagster-mcp"
+  },
+  {
+    "id": "lloyd",
+    "name": "Lloyd by The L Suite",
+    "description": "Inhouse counsel insights for members of The L Suite",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/lloyd"
+  },
+  {
+    "id": "powerpoint-by-anthropic",
+    "name": "PowerPoint (By Anthropic)",
+    "description": "Control Microsoft PowerPoint with AppleScript automation",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/powerpoint-by-anthropic"
+  },
+  {
+    "id": "apify",
+    "name": "Apify",
+    "description": "Extract data from any website with thousands of scrapers, crawlers, and automations on Apify Store.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/apify"
+  },
+  {
+    "id": "craft-io",
+    "name": "Craft.io",
+    "description": "Manage your end-to-end product lifecycle - backlog, PRDs, customer feedback, roadmaps, and strategic OKRs - with Claude connected directly to your Craft.io data.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/craft-io"
+  },
+  {
+    "id": "tines-3b",
+    "name": "Tines 3B",
+    "description": "Create, test, and ship apps, agents, and automations on Tines 3B without leaving Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/tines-3b"
+  },
+  {
+    "id": "word-by-anthropic",
+    "name": "Word (By Anthropic)",
+    "description": "Control Microsoft Word with AppleScript automation",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/word-by-anthropic"
+  },
+  {
+    "id": "ivo",
+    "name": "Ivo",
+    "description": "Explore your contracts, ask questions with supporting evidence, and build renewal calendars with Ivo.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ivo"
+  },
+  {
+    "id": "introhive",
+    "name": "Introhive",
+    "description": "Power your AI with firm-wide relationship intelligence",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/introhive"
+  },
+  {
+    "id": "taktile",
+    "name": "Taktile",
+    "description": "Build, test, and explain automated decisions in Taktile",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/taktile"
+  },
+  {
+    "id": "synthflow",
+    "name": "Synthflow",
+    "description": "Build and manage AI voice agents from chat",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/synthflow"
+  },
+  {
+    "id": "relativity",
+    "name": "Relativity",
+    "description": "Organize Data. Discover the Truth. Act on It.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/relativity"
+  },
+  {
+    "id": "pdf-tools",
+    "name": "PDF Tools",
+    "description": "Open any PDF already on your computer and work with it: read and search it in an interactive viewer, fill and sign forms, extract text and data, merge, split, and compare documents. Your files never leave your machine.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/pdf-tools"
+  },
+  {
+    "id": "desktop-commander",
+    "name": "Desktop Commander",
+    "description": "Build, explore, and automate on your local machine with access to files and terminal.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/desktop-commander"
+  },
+  {
+    "id": "honeybadger",
+    "name": "Honeybadger",
+    "description": "Investigate production errors, query logs, and manage dashboards and alarms from your AI assistant",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/honeybadger"
+  },
+  {
+    "id": "windows-mcp",
+    "name": "Windows-MCP",
+    "description": "MCP Server that enables Claude to interact with Windows OS",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/windows-mcp"
+  },
+  {
+    "id": "reco",
+    "name": "Reco",
+    "description": "SaaS & AI security context for AI-native investigations",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/reco"
+  },
+  {
+    "id": "zohocrm",
+    "name": "Zoho CRM",
+    "description": "Zoho CRM MCP Server lets AI assistants access and manage CRM data using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohocrm"
+  },
+  {
+    "id": "zohobooks",
+    "name": "Zoho Books",
+    "description": "Zoho Books MCP Server lets AI assistants access and manage accounting data using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohobooks"
+  },
+  {
+    "id": "campaign-monitor",
+    "name": "Campaign Monitor",
+    "description": "Report, audit, and draft campaigns in plain language",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/campaign-monitor"
+  },
+  {
+    "id": "autorfp-ai",
+    "name": "AutoRFP.ai",
+    "description": "Search your RFP content library, check live project status, and draft with approved answers in Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/autorfp-ai"
+  },
+  {
+    "id": "blender",
+    "name": "Blender",
+    "description": "Natural language interface with the Python API and documentation",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/blender"
+  },
+  {
+    "id": "kubernetes-mcp-server",
+    "name": "Kubernetes MCP Server",
+    "description": "MCP server for interacting with Kubernetes clusters via kubectl",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/kubernetes-mcp-server"
+  },
+  {
+    "id": "tableau",
+    "name": "Tableau",
+    "description": "Helping agents see and understand data.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/tableau"
+  },
+  {
+    "id": "informatica-catalog-discovery",
+    "name": "Informatica Catalog Discovery",
+    "description": "The Catalog Discovery MCP server allows your AI agents to discover and explore enterprise data assets in Cloud Data Governance and Catalog",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/informatica-catalog-discovery"
+  },
+  {
+    "id": "zohoworkdrive",
+    "name": "Zoho Workdrive",
+    "description": "Zoho WorkDrive MCP Server lets AI assistants manage files and folders using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohoworkdrive"
+  },
+  {
+    "id": "fantastical",
+    "name": "Fantastical",
+    "description": "Read events and tasks, create new items, make basic edits, and delete items from Fantastical for Mac.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/fantastical"
+  },
+  {
+    "id": "metabase-unofficial-community",
+    "name": "Metabase (Unofficial — Community)",
+    "description": "A high-performance MCP server for Metabase analytics data access with response optimization and robust error handling.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/metabase-unofficial-community"
+  },
+  {
+    "id": "ontora",
+    "name": "Ontora",
+    "description": "Understand how your company works, uncover bottlenecks, and improve processes with knowledge from your team.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ontora"
+  },
+  {
+    "id": "revvity-signals-ai",
+    "name": "Revvity Signals AI",
+    "description": "Natural language access to Signals electronic notebook",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/revvity-signals-ai"
+  },
+  {
+    "id": "read-and-write-apple-notes",
+    "name": "Read and Write Apple Notes",
+    "description": "Read, write, and manage notes in Apple Notes",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/read-and-write-apple-notes"
+  },
+  {
+    "id": "bronto",
+    "name": "Bronto",
+    "description": "Query your Observability data in plain language, then turn what you find into monitors, saved searches, and Investigation Reports.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/bronto"
+  },
+  {
+    "id": "dremio-cloud",
+    "name": "Dremio Cloud",
+    "description": "Analyze and get insights from your lakehouse data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/dremio-cloud"
+  },
+  {
+    "id": "autodesk-fusion",
+    "name": "Autodesk Fusion",
+    "description": "Create, modify, and inspect CAD geometry in Fusion",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/autodesk-fusion"
+  },
+  {
+    "id": "control-your-mac",
+    "name": "Control your Mac",
+    "description": "Execute AppleScript to automate tasks on macOS.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/control-your-mac"
+  },
+  {
+    "id": "minutes-conversation-memory",
+    "name": "Minutes Conversation Memory",
+    "description": "The private, owned conversation-memory layer for AI. Record, transcribe, and search every meeting, voice memo, and dictation entirely on your own machine — nothing uploaded — then let any AI you connect recall it. Plain-markdown output you keep forever; no cloud, no API key, no vendor to outlive.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/minutes-conversation-memory"
+  },
+  {
+    "id": "zohoinvoice",
+    "name": "Zoho Invoice",
+    "description": "Zoho Invoice MCP Server lets AI assistants manage invoices, payments, and billing data using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohoinvoice"
+  },
+  {
+    "id": "horizon3-nodezero",
+    "name": "Horizon3 NodeZero",
+    "description": "Run NodeZero pentests, analyze exploits & verify fixes",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/horizon3-nodezero"
+  },
+  {
+    "id": "intapp-celeste",
+    "name": "Intapp Celeste",
+    "description": "Securely, compliantly access Intapp Celeste products",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/intapp-celeste"
+  },
+  {
+    "id": "grafana-mcp-server",
+    "name": "Grafana MCP Server",
+    "description": "An MCP server giving access to Grafana dashboards, datasources, alerting, and more",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/grafana-mcp-server"
+  },
+  {
+    "id": "mailtrap",
+    "name": "Mailtrap",
+    "description": "Send emails and manage templates using Mailtrap",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/mailtrap"
+  },
+  {
+    "id": "zohoanalytics",
+    "name": "Zoho Analytics Cloud",
+    "description": "Zoho Analytics MCP Server lets AI assistants query and analyze business data using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohoanalytics"
+  },
+  {
+    "id": "drafts",
+    "name": "Drafts",
+    "description": "MCP server for interacting with the Drafts app on macOS",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/drafts"
+  },
+  {
+    "id": "macos-mcp",
+    "name": "MacOS-MCP",
+    "description": "Lightweight MCP Server for macOS desktop interaction",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/macos-mcp"
+  },
+  {
+    "id": "mitratech-legal",
+    "name": "Mitratech Legal",
+    "description": "Work with your Mitratech TeamConnect matters, invoices, approvals and records in Claude, powered by ARIES™.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/mitratech-legal"
+  },
+  {
+    "id": "read-and-send-imessages",
+    "name": "Read and Send iMessages",
+    "description": "Send, read, and manage messages through Apple's Messages app",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/read-and-send-imessages"
+  },
+  {
+    "id": "coupler-io-578a0a",
+    "name": "Coupler.io",
+    "description": "Connect data from hundreds of data sources and apps to analyze it with Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/coupler-io-578a0a"
+  },
+  {
+    "id": "zohosign",
+    "name": "Zoho Sign",
+    "description": "Zoho Sign MCP Server lets AI assistants manage document signing workflows using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohosign"
+  },
+  {
+    "id": "vibe-prospecting",
+    "name": "Vibe Prospecting",
+    "description": "Power your chat with B2B data to create lead lists, research companies, personalize your outreach, and more.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/vibe-prospecting"
+  },
+  {
+    "id": "azure-mcp-server",
+    "name": "Azure MCP Server",
+    "description": "Provides Model Context Protocol (MCP) integration and tooling for Azure.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/azure-mcp-server"
+  },
+  {
+    "id": "socket",
+    "name": "Socket",
+    "description": "Socket MCP server for scanning dependencies",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/socket"
+  },
+  {
+    "id": "smarter-drafter",
+    "name": "Smarter Drafter",
+    "description": "Draft client-ready legal documents from your firm's approved templates, inside Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/smarter-drafter"
+  },
+  {
+    "id": "sap-fiori-mcp-server",
+    "name": "SAP Fiori MCP Server",
+    "description": "Generate and adapt SAP Fiori elements applications with AI coding assistants. Supports List Report, Object Page, and Flexible Column layouts.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sap-fiori-mcp-server"
+  },
+  {
+    "id": "enrichr-mcp-server",
+    "name": "Enrichr MCP Server",
+    "description": "Gene set enrichment analysis using Enrichr API with multi-library support",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/enrichr-mcp-server"
+  },
+  {
+    "id": "kapture-browser-automation",
+    "name": "Kapture Browser Automation",
+    "description": "Control web browsers through the Model Context Protocol using Chrome DevTools",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/kapture-browser-automation"
+  },
+  {
+    "id": "guardz",
+    "name": "Guardz",
+    "description": "Prioritize client security risks, investigate incidents and prepare client updates with live Guardz data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/guardz"
+  },
+  {
+    "id": "aws-api-mcp-server",
+    "name": "AWS API MCP Server",
+    "description": "The AWS API MCP Server lets AI assistants manage AWS resources using AWS CLI commands. It acts as a secure bridge, enabling creation, updates, and management across all AWS services.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/aws-api-mcp-server"
+  },
+  {
+    "id": "affinity-106b90",
+    "name": "Affinity",
+    "description": "Spend more time on your craft by automating repetitive tasks with Claude and Affinity",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/affinity-106b90"
+  },
+  {
+    "id": "revolut-x",
+    "name": "Revolut X",
+    "description": "Check balances, view orders, analyze markets, and backtest trading strategies on Revolut X. All through natural language in Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/revolut-x"
+  },
+  {
+    "id": "pushwoosh-manymoney",
+    "name": "Pushwoosh ManyMoney",
+    "description": "Drive your Pushwoosh project in natural language — build segments, presets, and customer journeys, diagnose delivery, and analyze campaign performance, right from your AI client.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/pushwoosh-manymoney"
+  },
+  {
+    "id": "microsoft-clarity",
+    "name": "Microsoft Clarity",
+    "description": "MCP Server for Microsoft Clarity",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/microsoft-clarity"
+  },
+  {
+    "id": "sapui5-mcp-server",
+    "name": "SAPUI5 MCP Server",
+    "description": "MCP server for SAPUI5/OpenUI5 development. Create and validate apps, access API docs, and get development guidelines.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sapui5-mcp-server"
+  },
+  {
+    "id": "mary",
+    "name": "Mary",
+    "description": "Organise, extract, draft, and verify the facts of your matter",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/mary"
+  },
+  {
+    "id": "conquest-mcp-server",
+    "name": "Conquest MCP Server",
+    "description": "Conquest’s verifiable AI financial advice engine in Claude — create plans, review client goals, and apply SAM strategies right where you work.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/conquest-mcp-server"
+  },
+  {
+    "id": "cloudinary-asset-management",
+    "name": "Cloudinary Asset Management",
+    "description": "Cloudinary Asset Management MCP Server",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/cloudinary-asset-management"
+  },
+  {
+    "id": "tooluniverse",
+    "name": "ToolUniverse",
+    "description": "ToolUniverse: An ecosystem for democratizing AI scientists with 600+ scientific tools.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/tooluniverse"
+  },
+  {
+    "id": "sandboxaq",
+    "name": "SandboxAQ",
+    "description": "Large Quantitative Models for scientific discovery",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sandboxaq"
+  },
+  {
+    "id": "cloudglue",
+    "name": "Cloudglue",
+    "description": "Analyze, search, and extract structured data from video collections using Cloudglue's video understanding platform.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/cloudglue"
+  },
+  {
+    "id": "noteplan",
+    "name": "Noteplan",
+    "description": "MCP server for interacting with the NotePlan app on macOS",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/noteplan"
+  },
+  {
+    "id": "backlog",
+    "name": "Backlog",
+    "description": "MCP Server",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/backlog"
+  },
+  {
+    "id": "zohoprojects",
+    "name": "Zoho Projects",
+    "description": "Control Zoho Projects data and task operations through MCP tools.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohoprojects"
+  },
+  {
+    "id": "ableton-knowledge",
+    "name": "Ableton Knowledge",
+    "description": "Ask Claude about Ableton products",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ableton-knowledge"
+  },
+  {
+    "id": "shadcn-ui",
+    "name": "Shadcn UI",
+    "description": "A Model Context Protocol (MCP) server for shadcn/ui components, providing AI assistants with access to component source code, demos, blocks, and metadata.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/shadcn-ui"
+  },
+  {
+    "id": "zscaler-mcp-server",
+    "name": "Zscaler MCP Server",
+    "description": "Zscaler MCP Server — AI-powered management of the Zscaler Zero Trust Exchange across ZIA, ZPA, ZDX, ZCC, ZTW, ZIdentity, EASM, Z-Insights, ZMS, and ZCell via the Model Context Protocol.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zscaler-mcp-server"
+  },
+  {
+    "id": "b12-website-generator",
+    "name": "B12 Website Generator",
+    "description": "Create a website in seconds! Generate, design, write code, and write copy for your website. Powered by B12. Contact: hello@b12.io",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/b12-website-generator"
+  },
+  {
+    "id": "zohodesk",
+    "name": "Zoho Desk",
+    "description": "Zoho Desk MCP Server lets AI assistants access and manage customer support data using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohodesk"
+  },
+  {
+    "id": "docling-mcp",
+    "name": "Docling MCP",
+    "description": "Docling MCP Server - Document processing and analysis with remote API and local conversion support",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/docling-mcp"
+  },
+  {
+    "id": "lumin-82219f",
+    "name": "Lumin",
+    "description": "Smarter Workflows for Files and Signatures",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/lumin-82219f"
+  },
+  {
+    "id": "scholar-sidekick",
+    "name": "Scholar Sidekick",
+    "description": "Resolve any scholarly identifier (DOI, PMID, PMCID, ISBN, arXiv, ISSN, ADS, WHO IRIS) into 10,000+ CSL styles or nine export formats, single or batch, plus retraction, open-access, and citation-verification checks (Topaz et al. Lancet 2026 fabrication-pattern detection).",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/scholar-sidekick"
+  },
+  {
+    "id": "mcp-memory",
+    "name": "MCP Memory",
+    "description": "Hosted persistent memory for AI agents that learns which facts help and lets the rest fade — one key across Claude Code, Cursor, VS Code & ChatGPT, no infra to run",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/mcp-memory"
+  },
+  {
+    "id": "pathmode",
+    "name": "Pathmode",
+    "description": "Connect AI agents to your Intent Layer. Get strategic context, dependency graphs, and implementation prompts.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/pathmode"
+  },
+  {
+    "id": "spark",
+    "name": "Spark",
+    "description": "Connect Claude to your inbox — read, draft, triage, and act on email, calendars, meetings, and contacts.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/spark"
+  },
+  {
+    "id": "zoho-analytics",
+    "name": "Zoho Analytics",
+    "description": "Turn natural language into data insights. Analyze BI data, visualize trends, and answer complex business questions using Zoho Analytics",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zoho-analytics"
+  },
+  {
+    "id": "ukg-bryte",
+    "name": "UKG Bryte",
+    "description": "Bring your UKG HR and workforce data into Claude: find people and org charts, check time-off balances, and request and track time off.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ukg-bryte"
+  },
+  {
+    "id": "rainfocus",
+    "name": "RainFocus",
+    "description": "Manage attendees, sessions, exhibitors, and meetings for your RainFocus-powered events — all from Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/rainfocus"
+  },
+  {
+    "id": "zohosprints",
+    "name": "Zoho Sprints",
+    "description": "Zoho Sprints MCP Server lets AI assistants manage agile projects, sprints, and work items using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohosprints"
+  },
+  {
+    "id": "growthbook",
+    "name": "Growthbook",
+    "description": "MCP Server for interacting with GrowthBook - an open source feature flagging and experimentation platform",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/growthbook"
+  },
+  {
+    "id": "snyk-security",
+    "name": "Snyk Security",
+    "description": "Easily find and fix security issues in your applications leveraging Snyk platform capabilities.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/snyk-security"
+  },
+  {
+    "id": "informatica-data-exploration",
+    "name": "Informatica Data Exploration",
+    "description": "Domain-agent MCP for data exploration and MDM entity discovery in IDMC. Exposes the Claire discovery agent's skills for exploring dataset content and mastered entities",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/informatica-data-exploration"
+  },
+  {
+    "id": "busycal",
+    "name": "BusyCal",
+    "description": "Manage your calendars, events, tasks, and availability in BusyCal.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/busycal"
+  },
+  {
+    "id": "dynatrace-mcp-server",
+    "name": "Dynatrace MCP Server",
+    "description": "[DEPRECATED] Access Dynatrace observability data: logs, metrics, problems, vulnerabilities via DQL and Dynatrace Intelligence",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/dynatrace-mcp-server"
+  },
+  {
+    "id": "karp-inspector-lite",
+    "name": "KARP Inspector Lite",
+    "description": "Semantic codebase search for Claude Desktop. Find code by meaning, not just keywords. Zero API keys, zero setup.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/karp-inspector-lite"
+  },
+  {
+    "id": "qase-test-management",
+    "name": "Qase Test Management",
+    "description": "Comprehensive integration with the Qase Test Management Platform. Manage test cases, runs, plans, suites, environments, and milestones.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/qase-test-management"
+  },
+  {
+    "id": "sap-mdk-mcp-server",
+    "name": "SAP MDK MCP Server",
+    "description": "AI-assisted development of SAP Mobile Development Kit (MDK) applications. Create, validate, migrate, and deploy cross-platform mobile apps.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sap-mdk-mcp-server"
+  },
+  {
+    "id": "website-auditor",
+    "name": "Website Auditor",
+    "description": "AI visibility + site audits: see if ChatGPT, Perplexity, Claude & Gemini recommend a website.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/website-auditor"
+  },
+  {
+    "id": "jaz-accounting",
+    "name": "Jaz Accounting",
+    "description": "Fastest way to manage money",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/jaz-accounting"
+  },
+  {
+    "id": "android-mcp",
+    "name": "Android-MCP",
+    "description": "Lightweight MCP Server for Android Operating System",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/android-mcp"
+  },
+  {
+    "id": "clickup-2f35af",
+    "name": "ClickUp",
+    "description": "Search, create, and retrieve tasks and documents, add comments, and track time through natural language commands.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/clickup-2f35af"
+  },
+  {
+    "id": "ckan-mcp-server",
+    "name": "CKAN MCP Server",
+    "description": "Explore open data portals based on CKAN (dati.gov.it, data.gov, open.canada.ca, ...)",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ckan-mcp-server"
+  },
+  {
+    "id": "stats-compass",
+    "name": "Stats Compass",
+    "description": "Multiple data science tools for data loading, cleaning, visualization, and ML workflows",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/stats-compass"
+  },
+  {
+    "id": "firefox-control",
+    "name": "Firefox Control",
+    "description": "Control Mozilla Firefox: tabs, history and web content (privacy aware)",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/firefox-control"
+  },
+  {
+    "id": "zohobilling",
+    "name": "Zoho Billing",
+    "description": "Zoho Billing MCP Server lets AI assistants access and manage billing and subscription data using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohobilling"
+  },
+  {
+    "id": "panos-mcp",
+    "name": "PanOS MCP",
+    "description": "Control Palo Alto Networks PA-Series firewalls and Panorama with AI. 117 tools across 16 modules: security policies, NAT, objects, VPN, logs, WildFire, GlobalProtect, decryption, and more. Supports staged commits and read-only inspection. For multi-firewall setups use the CLI mode — see github.com/apius-tech/Palo-MCP.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/panos-mcp"
+  },
+  {
+    "id": "vybit-notifications",
+    "name": "Vybit Notifications",
+    "description": "Send push notifications with personalized sounds via the Vybit platform",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/vybit-notifications"
+  },
+  {
+    "id": "airbnb-search-listings",
+    "name": "Airbnb Search & Listings",
+    "description": "Search Airbnb listings with advanced filtering and get detailed property information",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/airbnb-search-listings"
+  },
+  {
+    "id": "sap-cap-mcp-server",
+    "name": "SAP CAP MCP Server",
+    "description": "AI-assisted development of SAP Cloud Application Programming Model (CAP) projects. Enables searching CDS models and CAP documentation.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sap-cap-mcp-server"
+  },
+  {
+    "id": "things-applescript",
+    "name": "Things (AppleScript)",
+    "description": "Claude Desktop Extension for Things, the award-winning personal task manager",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/things-applescript"
+  },
+  {
+    "id": "azure-mcp-server-7eab26",
+    "name": "Azure MCP Server",
+    "description": "Provides Model Context Protocol (MCP) integration and tooling for Azure.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/azure-mcp-server-7eab26"
+  },
+  {
+    "id": "smartbear-mcp",
+    "name": "SmartBear MCP",
+    "description": "MCP server for AI access to SmartBear tools, including BugSnag, PactFlow, QMetry, Reflect, Swagger, Zephyr and QTM4J.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/smartbear-mcp"
+  },
+  {
+    "id": "stackql-mcp-server",
+    "name": "StackQL MCP Server",
+    "description": "SQL-native query and provisioning engine for cloud infrastructure, served over MCP via 'stackql mcp'. Multiplatform bundle: contains the darwin, linux and windows binaries; the host selects via platform_overrides.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/stackql-mcp-server"
+  },
+  {
+    "id": "vendr-software-pricing-tools",
+    "name": "Vendr Software Pricing Tools",
+    "description": "Model Context Protocol tools for Vendr software pricing insights. Get price estimates, company information, and product catalog data.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/vendr-software-pricing-tools"
+  },
+  {
+    "id": "lindo-ai",
+    "name": "Lindo AI",
+    "description": "Create websites, pages, and blog posts with AI. Manage clients and credits.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/lindo-ai"
+  },
+  {
+    "id": "brave-applescript",
+    "name": "Brave (AppleScript)",
+    "description": "Control Brave Browser tabs, windows, and navigation",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/brave-applescript"
+  },
+  {
+    "id": "react-spectrum-s2",
+    "name": "React Spectrum (S2)",
+    "description": "Build apps with Adobe's React Spectrum component library.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/react-spectrum-s2"
+  },
+  {
+    "id": "pophive-public-health-data",
+    "name": "PopHIVE Public Health Data",
+    "description": "Access near real-time public health data from PopHIVE dashboards including immunizations, respiratory diseases, chronic conditions, hospital capacity, injury/overdose rates, and youth mental health trends.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/pophive-public-health-data"
+  },
+  {
+    "id": "defense-com-threat-analysis",
+    "name": "Defense.com Threat Analysis",
+    "description": "Access your Defense.com portal to view open threats, security issues, and team workload",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/defense-com-threat-analysis"
+  },
+  {
+    "id": "perseus-vault-persistent-memory-for-claude",
+    "name": "Perseus Vault — Persistent Memory for Claude",
+    "description": "Persistent, deterministic memory for AI agents. They guess, we remember. 122 canonical MCP tools: remember, recall, search, link entities, bi-temporal journal + audit trail, state management, AES-256-GCM encryption enabled by default. Local-first, single Rust binary, zero cloud dependencies.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/perseus-vault-persistent-memory-for-claude"
+  },
+  {
+    "id": "blockchainquery",
+    "name": "BlockchainQuery",
+    "description": "Free blockchain data access across 60+ networks. Live lookups for balances, transactions, blocks, tokens, staking, governance, and domain resolution — powered by Pocket Network's decentralized RPC infrastructure. No API key required.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/blockchainquery"
+  },
+  {
+    "id": "sketch",
+    "name": "Sketch",
+    "description": "Connect to Sketch's local MCP server to explore your designs, organize your documents, generate code, export assets, and more.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/sketch"
+  },
+  {
+    "id": "meetgeek",
+    "name": "MeetGeek",
+    "description": "MCP server for MeetGeek API integration, providing tools to manage meetings, transcripts, highlights, and insights.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/meetgeek"
+  },
+  {
+    "id": "react-aria",
+    "name": "React Aria",
+    "description": "Build accessible UI components with React Aria.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/react-aria"
+  },
+  {
+    "id": "finance-toolkit",
+    "name": "Finance Toolkit",
+    "description": "Give AI assistants access to 200+ financial metrics calculated transparently from raw financial statements, not pulled from third-party endpoints.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/finance-toolkit"
+  },
+  {
+    "id": "rapid7-bulk-export",
+    "name": "Rapid7 Bulk Export",
+    "description": "Export and analyze Rapid7 InsightVM vulnerability data via SQL queries",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/rapid7-bulk-export"
+  },
+  {
+    "id": "zohopagesense",
+    "name": "Zoho PageSense",
+    "description": "Zoho PageSense MCP Server lets AI assistants analyze and optimize website experiences using natural language.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/zohopagesense"
+  },
+  {
+    "id": "10x-genomics-cloud",
+    "name": "10x Genomics Cloud",
+    "description": "Interact with 10x Genomics Cloud platform",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/10x-genomics-cloud"
+  },
+  {
+    "id": "eulerian-marketing-platform",
+    "name": "Eulerian Marketing Platform",
+    "description": "Ask Claude about your Eulerian data — analytics, multi-touch attribution, audience segments, and campaign activation — in plain English.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/eulerian-marketing-platform"
+  },
+  {
+    "id": "conviso-mcp-server",
+    "name": "Conviso MCP Server",
+    "description": "Read and write Conviso Platform data (companies, projects, issues, assets, tickets, requirements, applications, scans, supply chain, AI-pentest, threat modeling) from MCP clients.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/conviso-mcp-server"
+  },
+  {
+    "id": "harness-mcp-server",
+    "name": "Harness MCP Server",
+    "description": "Connect AI agents to Harness for CI/CD, code repositories, pull requests, services, environments, and feature flags.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/harness-mcp-server"
+  },
+  {
+    "id": "mcp-instana-server",
+    "name": "MCP Instana Server",
+    "description": "MCP Instana Server for Observability",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/mcp-instana-server"
+  },
+  {
+    "id": "local-falcon-7832b1",
+    "name": "Local Falcon",
+    "description": "Monitor and improve visibility across AI search platforms (ChatGPT, Gemini, Grok, Google AI Overviews, AI Mode) and in local search (Google Maps, Apple Maps) with 37 tools for AI visibility tracking, geo-grid rank analysis, competitor intelligence, campaign management, and Google Business Profile monitoring.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/local-falcon-7832b1"
+  },
+  {
+    "id": "openstaad-mcp-server",
+    "name": "OpenSTAAD MCP Server",
+    "description": "MCP server for Bentley STAAD.Pro via the OpenSTAAD API",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/openstaad-mcp-server"
+  },
+  {
+    "id": "miggo",
+    "name": "Miggo",
+    "description": "MCP server for Miggo's public API - query services, endpoints, vulnerabilities, findings, dependencies, and third-party integrations",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/miggo"
+  },
+  {
+    "id": "resolume-arena-mcp-server",
+    "name": "Resolume Arena MCP Server",
+    "description": "Control Resolume Arena using natural language",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/resolume-arena-mcp-server"
+  },
+  {
+    "id": "dash",
+    "name": "Dash",
+    "description": "Search and browse documentation from Dash, the macOS API documentation browser.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/dash"
+  },
+  {
+    "id": "nutrient-pdf-editor",
+    "name": "Nutrient PDF Editor",
+    "description": "View, annotate, fill forms, and redact PDFs directly from Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/nutrient-pdf-editor"
+  },
+  {
+    "id": "lens-studio",
+    "name": "Lens Studio",
+    "description": "An agentic AI system that help you build, debug, and generate Lenses for Snapchat and Spectacles",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/lens-studio"
+  },
+  {
+    "id": "cucumber-studio-mcp",
+    "name": "Cucumber Studio MCP",
+    "description": "MCP server for Cucumber Studio API integration - access test scenarios, action words, and execution data",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/cucumber-studio-mcp"
+  },
+  {
+    "id": "nutrient-dws",
+    "name": "Nutrient DWS",
+    "description": "Process, sign, redact, and transform documents from Claude Desktop using Nutrient.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/nutrient-dws"
+  },
+  {
+    "id": "signwell",
+    "name": "SignWell",
+    "description": "Model Context Protocol server that orchestrates SignWell's e-signature workflows — create, send, track, and manage documents and templates.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/signwell"
+  },
+  {
+    "id": "replicant-mcp",
+    "name": "Replicant MCP",
+    "description": "Android MCP server for AI-assisted Android development. Build APKs, launch emulators, manage devices, automate UI, and analyze logs.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/replicant-mcp"
+  },
+  {
+    "id": "avanquest-pdf-api-extension",
+    "name": "Avanquest PDF API Extension",
+    "description": "MCP server for the Avanquest PDF API, offering scalable tools for PDF conversion, merging, compression, splitting, and advanced document processing automation.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/avanquest-pdf-api-extension"
+  },
+  {
+    "id": "goplus-agentguard",
+    "name": "GoPlus AgentGuard",
+    "description": "Security guard for AI agents — blocks malicious skills, prevents data leaks, protects secrets.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/goplus-agentguard"
+  },
+  {
+    "id": "oilpriceapi-oil-gas-commodity-prices",
+    "name": "OilPriceAPI — Oil, Gas & Commodity Prices",
+    "description": "Real-time oil, gas & commodity prices. 26 tools: spot, history, futures, alerts, market briefs.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/oilpriceapi-oil-gas-commodity-prices"
+  },
+  {
+    "id": "openreplay",
+    "name": "OpenReplay",
+    "description": "Query and explore your replays and analytics.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/openreplay"
+  },
+  {
+    "id": "resolume-wire-mcp-server",
+    "name": "Resolume Wire MCP Server",
+    "description": "Control Resolume Wire using natural language",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/resolume-wire-mcp-server"
+  },
+  {
+    "id": "tomba-mcp-server",
+    "name": "Tomba MCP Server",
+    "description": "MCP server for Tomba email finder and verification API",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/tomba-mcp-server"
+  },
+  {
+    "id": "saga-project-tracker-for-ai-agents",
+    "name": "Saga — Project Tracker for AI Agents",
+    "description": "A Jira-like project tracker MCP server for AI agents. SQLite-backed, per-project scoped, with full hierarchy and activity logging — so LLMs never lose track.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/saga-project-tracker-for-ai-agents"
+  },
+  {
+    "id": "rt-request-tracker",
+    "name": "RT (Request Tracker)",
+    "description": "MCP server for RT (Request Tracker) — search tickets, manage queues, add comments and replies, and update ticket fields.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/rt-request-tracker"
+  },
+  {
+    "id": "porkbun",
+    "name": "Porkbun",
+    "description": "Register and manage domains, DNS, DNSSEC, SSL, email forwarding, the marketplace, static hosting, and webhooks through the official Porkbun API.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/porkbun"
+  },
+  {
+    "id": "black-duck-security-scanner",
+    "name": "Black Duck Security Scanner",
+    "description": "AI-powered security vulnerability scanning via Black Duck Signal.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/black-duck-security-scanner"
+  },
+  {
+    "id": "la-growth-machine",
+    "name": "La Growth Machine",
+    "description": "Connect La Growth Machine to Claude — manage campaigns, leads, audiences and conversations directly from AI.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/la-growth-machine"
+  },
+  {
+    "id": "ultipa",
+    "name": "Ultipa",
+    "description": "Manage Ultipa Cloud instances and run GQL graph queries, algorithms, backups, and metrics from Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ultipa"
+  },
+  {
+    "id": "kiteworks-mcp-server",
+    "name": "Kiteworks MCP Server",
+    "description": "Securely connect AI assistants to your Kiteworks instance for file, folder, and search operations",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/kiteworks-mcp-server"
+  },
+  {
+    "id": "redacta",
+    "name": "Redacta",
+    "description": "Pseudonymise patient identifiers and PII in text, and restore them — on-device, nothing leaves your machine.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/redacta"
+  },
+  {
+    "id": "infor",
+    "name": "Infor",
+    "description": "Unlock Claude for your Infor apps with Velocity Suite. Get live answers and take action on orders, inventory, production, and finance, all within your own Infor permissions.”",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/infor"
+  },
+  {
+    "id": "airmail",
+    "name": "Airmail",
+    "description": "Manage emails, calendars, contacts, and more from Claude using Airmail's MCP server.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/airmail"
+  },
+  {
+    "id": "azure-mcp-server-76eac1",
+    "name": "Azure MCP Server",
+    "description": "Provides Model Context Protocol (MCP) integration and tooling for Azure.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/azure-mcp-server-76eac1"
+  },
+  {
+    "id": "baremetrics",
+    "name": "Baremetrics",
+    "description": "Read-only access to Baremetrics SaaS analytics — metrics, customers, subscriptions, plans, charges, and events.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/baremetrics"
+  },
+  {
+    "id": "celayix",
+    "name": "Celayix",
+    "description": "Query Celayix workforce management data (employees, shifts, customers, sites, services, time off, qualifications) directly from the LLM.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/celayix"
+  },
+  {
+    "id": "aws-web-search",
+    "name": "AWS Web Search",
+    "description": "Current, cited web results for Claude from an Amazon-operated web index, served through your own AWS account.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/aws-web-search"
+  },
+  {
+    "id": "blueconic",
+    "name": "BlueConic",
+    "description": "Connect Claude to your BlueConic CDP and explore tenant data through dynamically generated MCP tools.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/blueconic"
+  },
+  {
+    "id": "denodo-mcp-connector",
+    "name": "Denodo MCP Connector",
+    "description": "Connect Claude Desktop to a Denodo Virtual DataPort database via MCP",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/denodo-mcp-connector"
+  },
+  {
+    "id": "reddit-mcp-buddy",
+    "name": "Reddit MCP Buddy",
+    "description": "Browse Reddit directly in Claude Desktop. Search posts, analyze users, explore communities - no API keys needed.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/reddit-mcp-buddy"
+  },
+  {
+    "id": "pasteapp",
+    "name": "Pasteapp",
+    "description": "Local MCP server bridge for Paste — give Claude Desktop, Claude Code, Cursor, Codex, and other AI tools access to your Mac clipboard history and pinboards.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/pasteapp"
+  },
+  {
+    "id": "quinbook",
+    "name": "Quinbook",
+    "description": "Talk to your quinbook ticketing system in plain language — bookings, slots, calendar, contacts, coupons and cart/order operations as tools for Claude.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/quinbook"
+  },
+  {
+    "id": "automox",
+    "name": "Automox",
+    "description": "Talk to your Automox console in natural language. Manage devices, patches, and policies.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/automox"
+  },
+  {
+    "id": "natoma",
+    "name": "Natoma",
+    "description": "Access all your internal tools, enterprise apps & data.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/natoma"
+  },
+  {
+    "id": "ipgeolocation-io-mcp-server",
+    "name": "IPGeolocation.io MCP Server",
+    "description": "Official MCP server for IP geolocation, IP security, abuse contacts, ASN, timezone, astronomy, and user-agent parsing.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ipgeolocation-io-mcp-server"
+  },
+  {
+    "id": "lyrenth",
+    "name": "Lyrenth",
+    "description": "Read any web page as a clean, token-efficient AIDocument.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/lyrenth"
+  },
+  {
+    "id": "solstone",
+    "name": "solstone",
+    "description": "let Claude work from your solstone journal: the people, projects and conversations, kept on your own computer.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/solstone"
+  },
+  {
+    "id": "commerce-layer-metrics",
+    "name": "Commerce Layer Metrics",
+    "description": "Commerce Layer Metrics MCP server",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/commerce-layer-metrics"
+  },
+  {
+    "id": "droplinked",
+    "name": "droplinked",
+    "description": "Discover and verify products across droplinked's KYB-attested merchant network. Read-only agentic-commerce discovery.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/droplinked"
+  },
+  {
+    "id": "litmus-mcp",
+    "name": "Litmus MCP",
+    "description": "Connect Claude to Litmus Edge industrial devices through your Litmus MCP Server.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/litmus-mcp"
+  },
+  {
+    "id": "ravendb",
+    "name": "RavenDB",
+    "description": "Read-only MCP diagnostics server for RavenDB.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/ravendb"
+  },
+  {
+    "id": "flitiq-fmcsa-carrier-intelligence",
+    "name": "FlitIQ — FMCSA Carrier Intelligence",
+    "description": "Look up U.S. motor carriers, check CSA safety scores, verify insurance, and save carriers to your FlitIQ pipeline — all inside Claude. Requires a FlitIQ Pro or Team subscription.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/flitiq-fmcsa-carrier-intelligence"
+  },
+  {
+    "id": "apify-773fbb",
+    "name": "Apify",
+    "description": "Extract data from any website with thousands of tools.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/apify-773fbb"
+  },
+  {
+    "id": "motherboard",
+    "name": "Motherboard",
+    "description": "Read your company's service tickets, equipment records, SOPs and service manuals in Claude, with your existing Motherboard permissions.",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/motherboard"
+  },
+  {
+    "id": "1password",
+    "name": "1Password",
+    "description": "Sign in to sites with your saved logins",
+    "mcpUrl": "",
+    "website": "https://claude.com/marketplace/connectors/1password"
   }
 ]

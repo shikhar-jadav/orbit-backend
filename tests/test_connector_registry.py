@@ -15,9 +15,9 @@ import connector_registry  # noqa: E402
 import oauth_providers  # noqa: E402
 
 
-def test_loads_all_950_marketplace_entries():
+def test_loads_all_marketplace_entries():
     manifests = connector_registry.load_marketplace_manifests()
-    assert len(manifests) == 950
+    assert len(manifests) == 1210
     ids = [m.id for m in manifests]
     assert len(ids) == len(set(ids)), "Duplicate connector IDs found"
     removed_ids = {

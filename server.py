@@ -75,8 +75,6 @@ from attachment_rag import (
     retrieve_relevant_chunks,
 )
 from mcp_tool_search import invalidate_mcp_tool_cache
-import github_mcp_client
-import gmail_mcp_server
 import skill_security
 from config_manager import RoundRobinProviderManager
 from embedding_manager import RoundRobinEmbeddingManager, RotatingEmbeddings
@@ -283,8 +281,6 @@ async def request_performance_middleware(request: Request, call_next):
     return response
 
 
-app.include_router(gmail_mcp_server.router)
-
 login_rate_limiter = auth.LoginRateLimiter(max_attempts=5, window_seconds=900)
 discover_rate_limiter = auth.LoginRateLimiter(max_attempts=30, window_seconds=300)
 otp_cooldown_limiter = auth.LoginRateLimiter(
@@ -396,8 +392,6 @@ def _initialize_application_state() -> None:
         except CredentialVaultNotConfiguredError as key_err:
             print(f"[SECURITY] Invalid INTEGRATION_ENCRYPTION_KEY; failing closed: {key_err}", flush=True)
             provider_integration_store = ProviderIntegrationStore(database, encryption_key="")
-        gmail_mcp_server.configure_provider_integration_store(provider_integration_store)
-        github_mcp_client.configure_provider_integration_store(provider_integration_store)
         try:
             interrupted_approvals = chat_store.interrupt_pending_approvals()
             if interrupted_approvals:
@@ -4283,14 +4277,6 @@ async def event_integration_oauth_callback_endpoint(
             scopes=scopes,
             metadata=metadata,
         )
-        if provider == "github":
-            marketplace.toggle_connector_enabled(
-                chat_store,
-                "github-mcp",
-                True,
-                user_id=session["user_id"],
-            )
-            github_mcp_client.clear_github_tools_cache(session["user_id"])
         return _event_oauth_result_html(provider, target_origin=target_origin)
     except Exception as exc:
         return _event_oauth_result_html(
@@ -4377,14 +4363,6 @@ async def disconnect_event_integration_endpoint(
             )
             if acc["user_id"] == current_user["user_id"]
         ]
-        if not remaining_github:
-            marketplace.toggle_connector_enabled(
-                chat_store,
-                "github-mcp",
-                False,
-                user_id=current_user["user_id"],
-            )
-        github_mcp_client.clear_github_tools_cache(current_user["user_id"])
     return {"disconnected": deleted}
 
 
@@ -7903,21 +7881,6 @@ async def toggle_connector_endpoint(
 ):
     """Enable or disable a connector."""
     try:
-        github_disconnected = False
-        if connector_id == "github-mcp" and not request.enabled:
-            github_hooks = provider_integration_store.list_github_hooks_for_user(
-                current_user["user_id"]
-            )
-            if github_hooks:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Delete GitHub event routines using this account first so Orbit can remove their repository webhooks.",
-                )
-            github_disconnected = provider_integration_store.delete_account(
-                current_user["user_id"], "github"
-            )
-            github_mcp_client.clear_github_tools_cache(current_user["user_id"])
-
         marketplace.toggle_connector_enabled(
             chat_store,
             connector_id,
@@ -7932,7 +7895,6 @@ async def toggle_connector_endpoint(
         return {
             "connector_id": connector_id,
             "enabled": sync_result.get("is_connected", request.enabled) if sync_result else request.enabled,
-            "github_disconnected": github_disconnected,
             **(sync_result or {}),
         }
     except KeyError:

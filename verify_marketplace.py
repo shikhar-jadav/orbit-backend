@@ -62,7 +62,14 @@ async def verify_single_connector(
         return base_record
 
     try:
-        probe = await mcp_client.probe_mcp_server(manifest.server_url, timeout=timeout)
+        probe = await asyncio.wait_for(
+            mcp_client.probe_mcp_server(manifest.server_url, timeout=timeout),
+            timeout=timeout + 3.0,
+        )
+    except asyncio.TimeoutError:
+        base_record["verification_status"] = connector_registry.STATUS_UNVERIFIED
+        base_record["error"] = "Timed out while probing MCP server."
+        return base_record
     except Exception as exc:
         base_record["verification_status"] = connector_registry.STATUS_UNVERIFIED
         base_record["error"] = str(exc)

@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import connector_registry
-import oauth_providers
 from credential_vault import CredentialUnrecoverableError, CredentialVault
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -13,104 +12,12 @@ SKILLS_LOCK_PATH = BASE_DIR / "skills-lock.json"
 # ------------------------------------------------------------------------------
 # Connectors Catalog
 # ------------------------------------------------------------------------------
-GMAIL_MCP_CONNECTOR: Dict[str, Any] = {
-    "id": "gmail-mcp",
-    "name": "Gmail",
-    "category": "Email & Productivity",
-    "description": (
-        "Connect Gmail to allow Orbit agents to search mailboxes, read email threads, "
-        "compose drafts, send messages, and manage labels with per-user OAuth security."
-    ),
-    "icon": "mail",
-    "badge": "Google",
-    "authType": "OAuth 2.0",
-    "oauthProvider": "gmail",
-    "website": "https://github.com/klodr/gmail-mcp",
-    "capabilities": [
-        "Read Emails & Threads",
-        "Compose & Send Emails",
-        "Create & Update Drafts",
-        "Manage Labels & Filters",
-        "Search Mailbox",
-        "Sandboxed Attachments",
-    ],
-    "configFields": [],
-}
-
-GITHUB_MCP_CONNECTOR: Dict[str, Any] = {
-    "id": "github-mcp",
-    "name": "GitHub",
-    "category": "Developer & Code",
-    "description": (
-        "Connect GitHub to browse repositories and code, manage issues and pull requests, "
-        "monitor GitHub Actions workflows, analyze security alerts, and power GitHub event triggers."
-    ),
-    "icon": "gitBranch",
-    "badge": "GitHub",
-    "authType": "OAuth 2.0",
-    "oauthProvider": "github",
-    "website": "https://github.com/github/github-mcp-server",
-    "capabilities": [
-        "Browse Repositories & Code",
-        "Manage Issues & Pull Requests",
-        "Monitor GitHub Actions & CI/CD",
-        "Code & Security Analysis",
-        "GitHub Event Triggers & Webhooks",
-    ],
-    "configFields": [],
-}
-
-def _enrich_builtin_connectors() -> None:
-    google_ok = oauth_providers.is_provider_oauth_configured("google")
-    google_spec = oauth_providers.get_provider_oauth_spec("google")
-    GMAIL_MCP_CONNECTOR.update({
-        "provider": "google",
-        "source": "orbit_adapter",
-        "source_type": "builtin",
-        "implementation_type": "orbit_adapter",
-        "transport": "in_process",
-        "authentication": "oauth2",
-        "oauth_provider_key": "google",
-        "supports_dynamic_registration": False,
-        "verification_status": "auth_required" if google_ok else "setup_required",
-        "support_status": "active" if google_ok else "setup_required",
-        "verification_notes": (
-            "Co-hosted Orbit Gmail MCP adapter with per-user Google OAuth."
-            if google_ok
-            else (google_spec.setup_instructions if google_spec else "Requires Google OAuth credentials.")
-        ),
-        "setup_instructions": None if google_ok else (google_spec.setup_instructions if google_spec else None),
-    })
-
-    github_ok = oauth_providers.is_provider_oauth_configured("github")
-    github_spec = oauth_providers.get_provider_oauth_spec("github")
-    GITHUB_MCP_CONNECTOR.update({
-        "provider": "github",
-        "source": "official",
-        "source_type": "builtin",
-        "implementation_type": "mcp_server",
-        "transport": "streamable_http",
-        "authentication": "oauth2",
-        "oauth_provider_key": "github",
-        "supports_dynamic_registration": False,
-        "verification_status": "auth_required" if github_ok else "setup_required",
-        "support_status": "active" if github_ok else "setup_required",
-        "verification_notes": (
-            "Official GitHub MCP integration with per-user OAuth."
-            if github_ok
-            else (github_spec.setup_instructions if github_spec else "Requires GitHub OAuth credentials.")
-        ),
-        "setup_instructions": None if github_ok else (github_spec.setup_instructions if github_spec else None),
-    })
-
-
-AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR, GITHUB_MCP_CONNECTOR]
+AVAILABLE_CONNECTORS: List[Dict[str, Any]] = []
 
 MARKETPLACE_MCPS_PATH = BASE_DIR / "data" / "marketplace_mcps.json"
 
 
 def _load_marketplace_mcps() -> None:
-    _enrich_builtin_connectors()
     manifests = connector_registry.load_marketplace_manifests()
     existing_ids = {c["id"] for c in AVAILABLE_CONNECTORS}
     for manifest in manifests:
@@ -121,9 +28,8 @@ def _load_marketplace_mcps() -> None:
 
 
 def reload_marketplace_connectors() -> int:
-    """Reload built-in and registry connectors (e.g., after verification)."""
+    """Reload registry connectors (e.g., after verification)."""
     AVAILABLE_CONNECTORS.clear()
-    AVAILABLE_CONNECTORS.extend([GMAIL_MCP_CONNECTOR, GITHUB_MCP_CONNECTOR])
     _load_marketplace_mcps()
     return len(AVAILABLE_CONNECTORS)
 

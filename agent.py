@@ -299,33 +299,6 @@ async def _execute_mcp_tool_with_auto_refresh(
     chat_store: Optional[Any] = None,
 ) -> str:
     """Execute an MCP tool with automatic 401 token refresh for OAuth connectors."""
-    # 0. Co-hosted Gmail MCP: Execute directly in-process with automatic token resolution & refresh
-    if (
-        conn.get("is_cohosted")
-        or conn.get("id") == "marketplace_gmail_mcp"
-        or conn.get("mcp_url") == "in-process://gmail"
-        or "gmail" in conn.get("name", "").lower()
-    ):
-        try:
-            from gmail_mcp_server import execute_gmail_tool, resolve_user_gmail_token
-            access_token, _, _ = await resolve_user_gmail_token(
-                None, x_user_id=target_user_id, allow_internal_user_id=True
-            )
-            if not access_token:
-                # Fallback to Authorization header if present
-                for k, v in custom_headers.items():
-                    if k.lower() == "authorization" and v.lower().startswith("bearer "):
-                        access_token = v[7:].strip()
-                        break
-            if not access_token:
-                return (
-                    "Error: Gmail account is not connected. "
-                    "Please connect your Google account in Settings > Integrations before accessing Gmail."
-                )
-            return await execute_gmail_tool(raw_mcp_name, tool_args if isinstance(tool_args, dict) else {}, access_token=access_token)
-        except Exception as ge:
-            return f"Error executing Gmail tool '{raw_mcp_name}': {ge}"
-
     import mcp_client
     try:
         return await mcp_client.call_mcp_tool(
@@ -881,51 +854,6 @@ class ReActAgent:
                 connectors = await asyncio.to_thread(
                     chat_store.get_personal_connectors, target_user_id, include_secrets=True
                 )
-
-                try:
-                    import marketplace
-                    import github_mcp_client
-                    pis = getattr(github_mcp_client, "_PROVIDER_INTEGRATION_STORE", None)
-                    mp_connectors = await asyncio.to_thread(
-                        marketplace.list_connectors_with_status,
-                        chat_store,
-                        user_id=target_user_id,
-                        provider_integration_store=pis,
-                    )
-                    for mp_c in mp_connectors:
-                        if not mp_c.get("is_enabled"):
-                            continue
-                        if mp_c.get("oauthProvider") and not mp_c.get("is_authenticated"):
-                            continue
-                        if mp_c.get("id") == "gmail-mcp":
-                            if any(c.get("name", "").lower() == "gmail" or "gmail" in c.get("mcp_url", "").lower() for c in connectors):
-                                continue
-                            try:
-                                from gmail_mcp_server import GMAIL_MCP_TOOLS
-                                connectors.append({
-                                    "id": "marketplace_gmail_mcp",
-                                    "name": "Gmail",
-                                    "mcp_url": "in-process://gmail",
-                                    "is_connected": True,
-                                    "is_cohosted": True,
-                                    "headers": [],
-                                    "tools": GMAIL_MCP_TOOLS,
-                                    "tool_permissions": {},
-                                })
-                            except Exception as g_err:
-                                print(f"[agent] Failed to load co-hosted Gmail MCP tools: {g_err}")
-                        elif mp_c.get("id") == "github-mcp":
-                            if any(c.get("id") == "marketplace_github_mcp" or "api.githubcopilot.com/mcp" in c.get("mcp_url", "").lower() for c in connectors):
-                                continue
-                            try:
-                                from github_mcp_client import load_github_mcp_connector
-                                gh_conn = await load_github_mcp_connector(target_user_id)
-                                if gh_conn and gh_conn.get("tools"):
-                                    connectors.append(gh_conn)
-                            except Exception as gh_err:
-                                print(f"[agent] Failed to load GitHub MCP tools: {gh_err}")
-                except Exception:
-                    pass
 
                 used_names = set(self.tools_by_name.keys())
 
