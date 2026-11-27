@@ -67,6 +67,8 @@ from psycopg.rows import dict_row
 import auth
 import marketplace
 import mcp_client
+import connector_registry
+import oauth_providers
 from attachment_rag import (
     LARGE_ATTACHMENT_RAG_THRESHOLD_CHARS,
     index_attachment_chunks,
@@ -1868,6 +1870,50 @@ class PersonalConnectorTokenAuthRequest(BaseModel):
 
 
 PENDING_MCP_OAUTH_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_MCP_OAUTH_STATE_SECRET: Optional[str] = None
+
+
+def _get_mcp_oauth_state_secret() -> str:
+    global _MCP_OAUTH_STATE_SECRET
+    if _MCP_OAUTH_STATE_SECRET is None:
+        _MCP_OAUTH_STATE_SECRET = (
+            os.getenv("SECRET_KEY")
+            or os.getenv("JWT_SECRET")
+            or os.getenv("ORBIT_ENCRYPTION_KEY")
+            or secrets.token_hex(32)
+        )
+    return _MCP_OAUTH_STATE_SECRET
+
+
+def _generate_mcp_oauth_state(user_id: str, connector_id: str) -> str:
+    """Generate a CSRF-resistant OAuth state token bound to user_id and connector_id."""
+    import hmac as _hmac_mod
+    nonce = secrets.token_hex(16)
+    payload = f"{user_id}:{connector_id}:{nonce}"
+    sig = _hmac_mod.new(
+        _get_mcp_oauth_state_secret().encode("utf-8"),
+        payload.encode("utf-8"),
+        "sha256",
+    ).hexdigest()
+    return f"mcp_{sig}_{nonce}"
+
+
+def _validate_mcp_oauth_state(state: str, user_id: str, connector_id: str) -> bool:
+    """Verify that an OAuth state token matches the expected user_id and connector_id."""
+    import hmac as _hmac_mod
+    if not state or not state.startswith("mcp_"):
+        return False
+    parts = state.split("_", 2)
+    if len(parts) != 3:
+        return False
+    _, received_sig, nonce = parts
+    payload = f"{user_id}:{connector_id}:{nonce}"
+    expected_sig = _hmac_mod.new(
+        _get_mcp_oauth_state_secret().encode("utf-8"),
+        payload.encode("utf-8"),
+        "sha256",
+    ).hexdigest()
+    return _hmac_mod.compare_digest(received_sig, expected_sig)
 PENDING_EVENT_OAUTH_STATES: Dict[str, Dict[str, Any]] = {}
 GMAIL_WATCH_RENEWAL_TASK: Optional[asyncio.Task] = None
 ACTIVE_CHAT_INTERRUPTS: Dict[str, asyncio.Future] = {}
@@ -4981,11 +5027,39 @@ async def disconnect_personal_connector(
     connector_id: str,
     current_user: Dict[str, Any] = Depends(require_user),
 ):
+    user_id = current_user["user_id"]
+    existing = _get_personal_connector_with_secrets(user_id, connector_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Connector not found.")
+
+    adv = dict(existing.get("advanced") or {})
+    oauth_tokens = dict(adv.get("oauth_tokens") or {})
+    oauth_meta = dict(adv.get("oauth_metadata") or {})
+    rev_endpoint = oauth_meta.get("revocation_endpoint")
+    if rev_endpoint and oauth_tokens.get("access_token"):
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                await mcp_client.revoke_mcp_oauth_token(
+                    client,
+                    rev_endpoint,
+                    oauth_tokens["access_token"],
+                    client_id=oauth_tokens.get("client_id"),
+                    client_secret=oauth_tokens.get("client_secret"),
+                )
+        except Exception:
+            pass
+
+    adv.pop("oauth_tokens", None)
+    clean_headers = [
+        h for h in (existing.get("headers") or [])
+        if str(h.get("key", "")).strip().lower() != "authorization"
+    ]
     updated = chat_store.update_personal_connector(
-        current_user["user_id"], connector_id, is_connected=False
+        user_id, connector_id, is_connected=False, headers=clean_headers, advanced=adv
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Connector not found.")
+    invalidate_mcp_tool_cache(connector_id)
     return updated
 
 
@@ -5009,19 +5083,25 @@ async def start_personal_connector_oauth(
     request: Request,
     current_user: Dict[str, Any] = Depends(require_user),
 ):
+    user_id = current_user["user_id"]
     existing = chat_store.get_personal_connector(
-        current_user["user_id"], connector_id, include_secrets=True
+        user_id, connector_id, include_secrets=True
     )
     if not existing:
         raise HTTPException(status_code=404, detail="Connector not found.")
 
     mcp_url = existing["mcp_url"]
-    adv = existing.get("advanced") or {}
+    adv = dict(existing.get("advanced") or {})
     oauth_meta = adv.get("oauth_metadata")
+    provider_key = adv.get("oauth_provider_key") or connector_registry._infer_provider_key(
+        mcp_url, str(adv.get("marketplace_id") or ""), existing.get("name", "")
+    )
 
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
         if not oauth_meta or not oauth_meta.get("authorization_endpoint"):
             oauth_meta = await mcp_client.discover_mcp_oauth_metadata(client, mcp_url)
+            if oauth_meta:
+                adv["oauth_metadata"] = oauth_meta
 
         if not oauth_meta or not oauth_meta.get("authorization_endpoint"):
             return {"needs_oauth": False}
@@ -5031,16 +5111,20 @@ async def start_personal_connector_oauth(
             base_url = "http://localhost:8000"
         redirect_uri = f"{base_url}/settings/personal-connectors/oauth/callback"
 
-        client_id = adv.get("oauth_client_id")
-        client_secret = adv.get("oauth_client_secret")
+        cred_res = oauth_providers.resolve_oauth_client_credentials(
+            provider_key, adv, oauth_meta
+        )
+        client_id = cred_res.get("client_id")
+        client_secret = cred_res.get("client_secret")
 
-        if not client_id and oauth_meta.get("registration_endpoint"):
+        if not client_id and cred_res.get("can_dynamic_register") and oauth_meta.get("registration_endpoint"):
             try:
                 client_id, client_secret = await mcp_client.register_mcp_oauth_client(
                     client,
                     oauth_meta["registration_endpoint"],
                     redirect_uri,
                     client_name="Orbit Agent",
+                    user_id=user_id,
                 )
                 if client_id:
                     adv["oauth_client_id"] = client_id
@@ -5057,6 +5141,7 @@ async def start_personal_connector_oauth(
                     "https://mcp.notion.com/register",
                     redirect_uri,
                     client_name="Orbit Agent",
+                    user_id=user_id,
                 )
                 if client_id:
                     adv["oauth_client_id"] = client_id
@@ -5069,11 +5154,13 @@ async def start_personal_connector_oauth(
         if not client_id:
             return {
                 "needs_oauth": True,
-                "error": "This MCP server requires an OAuth Client ID. Configure it under Advanced settings or supply an Integration Token.",
+                "setup_required": bool(cred_res.get("setup_required")),
+                "error": cred_res.get("setup_instructions")
+                or "This MCP server requires an OAuth Client ID. Configure it under Advanced settings or supply an Integration Token.",
             }
 
         code_verifier, code_challenge = mcp_client.generate_pkce_pair()
-        state = f"mcp_{uuid4().hex}"
+        state = _generate_mcp_oauth_state(user_id, connector_id)
 
         now_ts = time.time()
         for k in list(PENDING_MCP_OAUTH_SESSIONS.keys()):
@@ -5169,6 +5256,15 @@ p {{ margin: 0; color: #a1a1aa; font-size: 13.5px; line-height: 1.5; }}
 
     user_id = session_info["user_id"]
     connector_id = session_info["connector_id"]
+    if not _validate_mcp_oauth_state(state, user_id, connector_id):
+        return HTMLResponse(
+            content="""<!DOCTYPE html>
+<html><body style="background:#121214;color:#f4f4f5;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
+<div style="text-align:center;"><h2>Invalid OAuth State</h2><p>OAuth state validation failed. Please try connecting again.</p></div>
+<script>setTimeout(() => window.close(), 2500);</script>
+</body></html>""",
+            status_code=400,
+        )
     token_endpoint = session_info["token_endpoint"]
     redirect_uri = session_info["redirect_uri"]
     code_verifier = session_info["code_verifier"]
@@ -5228,6 +5324,9 @@ p {{ margin: 0; color: #a1a1aa; font-size: 13.5px; line-height: 1.5; }}
                 last_status_code=conn_res["status_code"] or 200,
                 auth_mode="now",
             )
+            invalidate_mcp_tool_cache(connector_id)
+            if not is_connected:
+                raise RuntimeError(conn_res.get("error") or "MCP server rejected credentials after OAuth.")
     except Exception as exc:
         err_str = str(exc)
         print(f"[MCP OAuth] Token exchange error: {err_str}")
@@ -7650,6 +7749,12 @@ async def _sync_marketplace_remote_mcp(
     target = next((c for c in marketplace.AVAILABLE_CONNECTORS if c.get("id") == connector_id), None)
     if not target or not target.get("mcpUrl"):
         return {}
+    ver_status = target.get("verification_status")
+    if enabled and ver_status in ("unsupported", "deprecated", "package_available"):
+        raise HTTPException(
+            status_code=422,
+            detail=target.get("verification_notes") or f"Connector '{connector_id}' is {ver_status} and cannot be connected.",
+        )
     try:
         existing_list = chat_store.list_personal_connectors_for_user(user_id)
     except Exception:
@@ -7665,7 +7770,36 @@ async def _sync_marketplace_remote_mcp(
     )
     if not enabled:
         if existing:
-            chat_store.update_personal_connector(user_id, existing["id"], is_connected=False)
+            secret_conn = _get_personal_connector_with_secrets(user_id, existing["id"]) or existing
+            adv = dict(secret_conn.get("advanced") or {})
+            oauth_tokens = dict(adv.get("oauth_tokens") or {})
+            oauth_meta = dict(adv.get("oauth_metadata") or {})
+            rev_endpoint = oauth_meta.get("revocation_endpoint")
+            if rev_endpoint and oauth_tokens.get("access_token"):
+                try:
+                    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                        await mcp_client.revoke_mcp_oauth_token(
+                            client,
+                            rev_endpoint,
+                            oauth_tokens["access_token"],
+                            client_id=oauth_tokens.get("client_id"),
+                            client_secret=oauth_tokens.get("client_secret"),
+                        )
+                except Exception:
+                    pass
+            adv.pop("oauth_tokens", None)
+            clean_headers = [
+                h for h in (secret_conn.get("headers") or [])
+                if str(h.get("key", "")).strip().lower() != "authorization"
+            ]
+            chat_store.update_personal_connector(
+                user_id,
+                existing["id"],
+                is_connected=False,
+                headers=clean_headers,
+                advanced=adv,
+                tools=[],
+            )
             invalidate_mcp_tool_cache(existing["id"])
         return {
             "personal_connector_id": existing["id"] if existing else None,
@@ -7704,7 +7838,10 @@ async def _sync_marketplace_remote_mcp(
             connector_type="remote_mcp",
             auth_mode="bearer" if api_key else "oauth",
             headers=headers_list,
-            advanced={"marketplace_id": connector_id},
+            advanced={
+                "marketplace_id": connector_id,
+                "oauth_provider_key": target.get("oauth_provider_key"),
+            },
             tools=tools,
             is_connected=is_connected,
             last_status_code=status_code,
@@ -7722,6 +7859,10 @@ async def _sync_marketplace_remote_mcp(
         "needs_oauth": not is_connected,
         "status_code": status_code,
         "tools_count": len(tools),
+        "tools": tools,
+        "error": conn_res.get("error"),
+        "verification_status": target.get("verification_status"),
+        "setup_instructions": target.get("setup_instructions"),
     }
 
 
@@ -7796,6 +7937,46 @@ async def toggle_connector_endpoint(
         }
     except KeyError:
         raise HTTPException(status_code=404, detail="Connector not found.")
+
+
+@app.get("/marketplace/connectors/{connector_id}/diagnostics")
+@app.get("/api/marketplace/connectors/{connector_id}/diagnostics")
+async def get_connector_diagnostics_endpoint(
+    connector_id: str,
+    current_user: Dict[str, Any] = Depends(require_user),
+):
+    """Return non-secret connection & verification diagnostics for a marketplace connector."""
+    user_id = current_user["user_id"]
+    target = next((c for c in marketplace.AVAILABLE_CONNECTORS if c.get("id") == connector_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Connector not found.")
+
+    personal_conn = None
+    try:
+        for item in chat_store.list_personal_connectors_for_user(user_id):
+            if (item.get("advanced") or {}).get("marketplace_id") == connector_id:
+                personal_conn = item
+                break
+    except Exception:
+        pass
+
+    return {
+        "connector_id": connector_id,
+        "name": target.get("name"),
+        "verification_status": target.get("verification_status"),
+        "verification_notes": target.get("verification_notes"),
+        "setup_instructions": target.get("setup_instructions"),
+        "implementation_type": target.get("implementation_type"),
+        "source": target.get("source"),
+        "transport": target.get("transport"),
+        "authentication": target.get("authentication"),
+        "supports_dynamic_registration": target.get("supports_dynamic_registration"),
+        "is_connected": bool(personal_conn and personal_conn.get("is_connected")),
+        "last_status_code": personal_conn.get("last_status_code") if personal_conn else None,
+        "last_checked_at": personal_conn.get("last_checked_at") if personal_conn else None,
+        "tools_count": len(personal_conn.get("tools") or []) if personal_conn else 0,
+        "tools": (personal_conn.get("tools") or []) if personal_conn else [],
+    }
 
 
 @app.get("/{frontend_path:path}", include_in_schema=False)

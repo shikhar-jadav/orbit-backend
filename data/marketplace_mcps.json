@@ -28,13 +28,6 @@
     "website": "https://claude.com/marketplace/connectors/notion"
   },
   {
-    "id": "microsoft-365",
-    "name": "Microsoft 365",
-    "description": "Access SharePoint, OneDrive, Outlook, and Teams directly in Claude",
-    "mcpUrl": "https://microsoft365.mcp.claude.com/mcp",
-    "website": "https://claude.com/marketplace/connectors/microsoft-365"
-  },
-  {
     "id": "figma",
     "name": "Figma",
     "description": "Generate diagrams and better code from Figma context",
@@ -178,7 +171,7 @@
     "id": "elevenlabs",
     "name": "ElevenLabs",
     "description": "Manage your ElevenAgents voice agents in your chat",
-    "mcpUrl": "https://api.elevenlabs.io/v1/mcp-claude-marketplace",
+    "mcpUrl": "https://api.us.elevenlabs.io/v1/mcp",
     "website": "https://claude.com/marketplace/connectors/elevenlabs"
   },
   {
@@ -201,13 +194,6 @@
     "description": "Search trusted Microsoft docs to power your development",
     "mcpUrl": "https://learn.microsoft.com/api/mcp",
     "website": "https://claude.com/marketplace/connectors/microsoft-learn"
-  },
-  {
-    "id": "pubmed",
-    "name": "PubMed",
-    "description": "Search biomedical literature from PubMed",
-    "mcpUrl": "https://pubmed.mcp.claude.com/mcp",
-    "website": "https://claude.com/marketplace/connectors/pubmed"
   },
   {
     "id": "lucid",
@@ -399,13 +385,6 @@
     "website": "https://claude.com/marketplace/connectors/ahrefs"
   },
   {
-    "id": "clinical-trials",
-    "name": "Clinical Trials",
-    "description": "Access ClinicalTrials.gov data",
-    "mcpUrl": "https://hcls.mcp.claude.com/clinical_trials/mcp",
-    "website": "https://claude.com/marketplace/connectors/clinical-trials"
-  },
-  {
     "id": "plaud",
     "name": "Plaud",
     "description": "Search and extract insights from your Plaud recordings.",
@@ -465,15 +444,8 @@
     "id": "make",
     "name": "Make",
     "description": "Build Make automations and AI Agents from Claude",
-    "mcpUrl": "https://mcp.make.com/",
+    "mcpUrl": "https://mcp.make.com/v2",
     "website": "https://claude.com/marketplace/connectors/make"
-  },
-  {
-    "id": "biorxiv",
-    "name": "bioRxiv",
-    "description": "Access bioRxiv and medRxiv preprint data",
-    "mcpUrl": "https://hcls.mcp.claude.com/biorxiv/mcp",
-    "website": "https://claude.com/marketplace/connectors/biorxiv"
   },
   {
     "id": "mobbin",
@@ -549,7 +521,7 @@
     "id": "chembl",
     "name": "ChEMBL",
     "description": "Access the ChEMBL Database",
-    "mcpUrl": "https://hcls.mcp.claude.com/chembl/mcp",
+    "mcpUrl": "https://chembl.caseyjhand.com/mcp",
     "website": "https://claude.com/marketplace/connectors/chembl"
   },
   {
@@ -630,13 +602,6 @@
     "website": "https://claude.com/marketplace/connectors/perplexity-computer"
   },
   {
-    "id": "claude-academy",
-    "name": "Claude Academy",
-    "description": "Search and read Claude Academy courses and tutorials",
-    "mcpUrl": "https://academy.claude.com/mcp",
-    "website": "https://claude.com/marketplace/connectors/claude-academy"
-  },
-  {
     "id": "tiktok-for-business",
     "name": "TikTok for Business",
     "description": "Create, manage, and analyze advertising campaigns on TikTok",
@@ -656,13 +621,6 @@
     "description": "Access institutional-quality financial data and analytics",
     "mcpUrl": "https://mcp.factset.com/content/v1",
     "website": "https://claude.com/marketplace/connectors/factset"
-  },
-  {
-    "id": "economic-index",
-    "name": "Anthropic Economic Index",
-    "description": "Explore public data on how the world uses Claude",
-    "mcpUrl": "https://econ-index.mcp.claude.com/mcp",
-    "website": "https://claude.com/marketplace/connectors/economic-index"
   },
   {
     "id": "mixpanel",
@@ -719,13 +677,6 @@
     "description": "Get Uber price & time estimates for any ride option",
     "mcpUrl": "https://mcp.uber.com/claude/rides-3p/mcp",
     "website": "https://claude.com/marketplace/connectors/uber"
-  },
-  {
-    "id": "npi-registry",
-    "name": "NPI Registry",
-    "description": "Access US National Provider Identifier (NPI) Registry",
-    "mcpUrl": "https://hcls.mcp.claude.com/npi_registry/mcp",
-    "website": "https://claude.com/marketplace/connectors/npi-registry"
   },
   {
     "id": "lastminute-com",
@@ -1022,13 +973,6 @@
     "website": "https://claude.com/marketplace/connectors/pagerduty"
   },
   {
-    "id": "icd-10-codes",
-    "name": "ICD-10 Codes",
-    "description": "Access ICD-10-CM and ICD-10-PCS code sets",
-    "mcpUrl": "https://hcls.mcp.claude.com/icd10_codes/mcp",
-    "website": "https://claude.com/marketplace/connectors/icd-10-codes"
-  },
-  {
     "id": "motion",
     "name": "Motion Creative Analytics",
     "description": "Analyze your Meta ad creative & competitor ad libraries",
@@ -1057,25 +1001,11 @@
     "website": "https://claude.com/marketplace/connectors/amazon-selling-partner"
   },
   {
-    "id": "pdf-viewer",
-    "name": "PDF Viewer",
-    "description": "Demo PDF viewer that renders PDFs from allowed URLs like arxiv.org",
-    "mcpUrl": "https://example-server.modelcontextprotocol.io/pdf/mcp",
-    "website": "https://claude.com/marketplace/connectors/pdf-viewer"
-  },
-  {
     "id": "trivago",
     "name": "Trivago",
     "description": "Use trivago's powerful metasearch to find your ideal hotel and compare prices from multiple providers.",
     "mcpUrl": "https://mcp.trivago.com/mcp",
     "website": "https://claude.com/marketplace/connectors/trivago"
-  },
-  {
-    "id": "threejs-3d-viewer",
-    "name": "Three.js 3D Viewer",
-    "description": "Demo 3D viewer that renders interactive 3D scenes and models using Three.js",
-    "mcpUrl": "https://example-server.modelcontextprotocol.io/threejs/mcp",
-    "website": "https://claude.com/marketplace/connectors/threejs-3d-viewer"
   },
   {
     "id": "bigdata",
@@ -1398,13 +1328,6 @@
     "description": "Connect Claude to Greenhouse. Search, analyze and update candidates, applications, jobs, interviews, scorecards, offers and more in plain language.",
     "mcpUrl": "https://mcp.greenhouse.io/mcp",
     "website": "https://claude.com/marketplace/connectors/greenhouse"
-  },
-  {
-    "id": "cms-coverage",
-    "name": "CMS Coverage",
-    "description": "Access the CMS Coverage Database",
-    "mcpUrl": "https://hcls.mcp.claude.com/cms_coverage/mcp",
-    "website": "https://claude.com/marketplace/connectors/cms-coverage"
   },
   {
     "id": "imanage",
@@ -2049,13 +1972,6 @@
     "description": "Build Full-Stack Web Apps with AI",
     "mcpUrl": "https://v0.app/api/mcp",
     "website": "https://claude.com/marketplace/connectors/v0"
-  },
-  {
-    "id": "play-sheet-music",
-    "name": "Play Sheet Music",
-    "description": "Ask Claude to generate and play some sheet music for you with a visual component",
-    "mcpUrl": "https://example-server.modelcontextprotocol.io/sheet-music/mcp",
-    "website": "https://claude.com/marketplace/connectors/play-sheet-music"
   },
   {
     "id": "agentmail",
@@ -5724,13 +5640,6 @@
     "description": "Archera enables companies to understand and commit to the cloud on the best terms for their business",
     "mcpUrl": "https://mcp.archera.ai/mcp",
     "website": "https://claude.com/marketplace/connectors/archera"
-  },
-  {
-    "id": "military-and-veteran-family-assistant",
-    "name": "Military and Veteran Family Assistant",
-    "description": "An assistant to help military and veteran families find and access resources.",
-    "mcpUrl": "https://milfam.mcp.claude.com/mcp",
-    "website": "https://claude.com/marketplace/connectors/military-and-veteran-family-assistant"
   },
   {
     "id": "nansen",

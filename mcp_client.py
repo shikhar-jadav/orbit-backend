@@ -180,25 +180,82 @@ UNSUPPORTED_SCHEMA_KEYS = {
 }
 
 
-def validate_mcp_url(raw_url: str) -> str:
-    """Validate and normalize a user-supplied HTTP(S) MCP server URL."""
+MAX_MCP_RESPONSE_BYTES = 4 * 1024 * 1024  # 4 MB response size guard
+
+_SSRF_BLOCKED_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
+
+_CLOUD_METADATA_HOSTS = frozenset({
+    "metadata.google.internal",
+    "metadata.goog",
+    "169.254.169.254",
+    "fd00:ec2::254",
+})
+
+_LOCALHOST_HOSTNAMES = frozenset({
+    "localhost",
+    "localhost.localdomain",
+    "ip6-localhost",
+    "ip6-loopback",
+})
+
+
+def _check_ip_allowed(ip: ipaddress._BaseAddress, *, allow_private: bool = False) -> None:
+    if ip.is_link_local or ip.is_multicast:
+        raise ValueError("Link-local and multicast addresses are not allowed.")
+    if not allow_private:
+        for net in _SSRF_BLOCKED_NETWORKS:
+            if ip in net:
+                raise ValueError(
+                    f"Connections to private, loopback, link-local, or reserved IP addresses are not allowed ({ip})."
+                )
+        if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_unspecified:
+            raise ValueError(
+                f"Connections to private, loopback, link-local, or reserved IP addresses are not allowed ({ip})."
+            )
+
+
+def validate_mcp_url(
+    raw_url: str,
+    *,
+    allow_private: bool = False,
+    require_https: bool = False,
+) -> str:
+    """Validate and normalize a user-supplied HTTP(S) MCP server URL with SSRF protection."""
     trimmed = (raw_url or "").strip()
     if not trimmed:
         raise ValueError("MCP server URL is required.")
     parsed = urlparse(trimmed)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+    allowed_schemes = {"https"} if require_https else {"http", "https"}
+    if parsed.scheme not in allowed_schemes or not parsed.netloc or not parsed.hostname:
+        if require_https:
+            raise ValueError("MCP server URL must use https://.")
         raise ValueError("Enter a valid http:// or https:// MCP server URL.")
 
-    hostname = parsed.hostname.lower()
-    if hostname in {"metadata.google.internal", "metadata.goog"}:
+    hostname = parsed.hostname.lower().rstrip(".")
+    if hostname in _CLOUD_METADATA_HOSTS:
         raise ValueError("Access to cloud metadata hosts is blocked.")
+    if not allow_private and hostname in _LOCALHOST_HOSTNAMES:
+        raise ValueError("Connections to loopback/localhost addresses are not allowed.")
+
+    ip_obj: Optional[ipaddress._BaseAddress] = None
     try:
-        ip = ipaddress.ip_address(hostname)
-        if ip.is_link_local or ip.is_multicast:
-            raise ValueError("Link-local and multicast addresses are not allowed.")
-    except ValueError as err:
-        if "not allowed" in str(err) or "blocked" in str(err):
-            raise
+        ip_obj = ipaddress.ip_address(hostname)
+    except ValueError:
+        ip_obj = None
+
+    if ip_obj is not None:
+        _check_ip_allowed(ip_obj, allow_private=allow_private)
 
     return trimmed
 
@@ -331,7 +388,7 @@ def _parse_www_authenticate(header: str) -> Dict[str, str]:
     return out
 
 
-_DYN_REG_CACHE: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {}
+_DYN_REG_CACHE: Dict[Tuple[str, str, str], Tuple[str, Optional[str]]] = {}
 
 
 def generate_pkce_pair() -> Tuple[str, str]:
@@ -396,6 +453,7 @@ async def discover_mcp_oauth_metadata(
                             "authorization_endpoint": as_meta["authorization_endpoint"],
                             "token_endpoint": as_meta.get("token_endpoint") or f"{base_as}/token",
                             "registration_endpoint": as_meta.get("registration_endpoint"),
+                            "revocation_endpoint": as_meta.get("revocation_endpoint"),
                             "scopes": scopes or as_meta.get("scopes_supported") or ["default"],
                             "code_challenge_methods_supported": as_meta.get(
                                 "code_challenge_methods_supported", ["S256"]
@@ -425,9 +483,10 @@ async def register_mcp_oauth_client(
     registration_endpoint: str,
     redirect_uri: str,
     client_name: str = "Orbit Agent",
+    user_id: str = "",
 ) -> Tuple[str, Optional[str]]:
     """Dynamically register an OAuth client (RFC 7591) for an MCP authorization server."""
-    cache_key = (registration_endpoint, redirect_uri)
+    cache_key = (user_id, registration_endpoint, redirect_uri)
     if cache_key in _DYN_REG_CACHE:
         return _DYN_REG_CACHE[cache_key]
 
@@ -545,6 +604,33 @@ async def refresh_mcp_oauth_token(
     return payload
 
 
+async def revoke_mcp_oauth_token(
+    client: httpx.AsyncClient,
+    revocation_endpoint: str,
+    token: str,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    token_type_hint: str = "access_token",
+) -> bool:
+    """Revoke an OAuth token via RFC 7009 revocation endpoint."""
+    if not revocation_endpoint or not token:
+        return False
+    data: Dict[str, str] = {"token": token, "token_type_hint": token_type_hint}
+    headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
+    try:
+        if client_id and client_secret:
+            r = await client.post(
+                revocation_endpoint, data=data, headers=headers, auth=(client_id, client_secret), timeout=8.0
+            )
+        else:
+            if client_id:
+                data["client_id"] = client_id
+            r = await client.post(revocation_endpoint, data=data, headers=headers, timeout=8.0)
+        return r.status_code in (200, 204)
+    except Exception:
+        return False
+
+
 def _extract_rpc_error(payload: Optional[Dict[str, Any]]) -> Optional[str]:
     if not payload or "error" not in payload or not payload["error"]:
         return None
@@ -573,8 +659,16 @@ async def _post_mcp_jsonrpc(
         ctype = (resp.headers.get("content-type") or "").lower()
 
         if status >= 400 or "text/event-stream" not in ctype:
-            raw_bytes = await resp.aread()
-            text = raw_bytes.decode("utf-8", errors="replace")
+            chunks: List[bytes] = []
+            total = 0
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > MAX_MCP_RESPONSE_BYTES:
+                    raise RuntimeError(
+                        f"MCP server response exceeded {MAX_MCP_RESPONSE_BYTES // (1024 * 1024)} MB limit."
+                    )
+                chunks.append(chunk)
+            text = b"".join(chunks).decode("utf-8", errors="replace")
             return status, reason, resp.headers, parse_mcp_text(text, ctype)
 
         last_obj: Optional[Dict[str, Any]] = None
@@ -639,19 +733,31 @@ async def _init_streamable_session(
     mcp_url: str,
     headers: Dict[str, str],
 ) -> Tuple[int, str, httpx.Headers, Optional[Dict[str, Any]], Optional[str]]:
-    init_body = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": {"name": "orbit-agent-studio", "version": "1.0.0"},
-        },
-    }
+    def _build_init(proto_ver: str) -> Dict[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": proto_ver,
+                "capabilities": {},
+                "clientInfo": {"name": "orbit-agent-studio", "version": "1.0.0"},
+            },
+        }
+
     status, reason, resp_headers, payload = await _post_mcp_jsonrpc(
-        client, mcp_url, headers, init_body, rpc_id=1
+        client, mcp_url, headers, _build_init(MCP_PROTOCOL_VERSION), rpc_id=1
     )
+    # Negotiate protocol version if server explicitly lists supported versions in -32602 error
+    if status == 400 and isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        err_data = payload["error"].get("data")
+        supported = err_data.get("supported") if isinstance(err_data, dict) else None
+        if isinstance(supported, list) and supported:
+            alt_ver = str(supported[0]).strip()
+            if alt_ver and alt_ver != MCP_PROTOCOL_VERSION:
+                status, reason, resp_headers, payload = await _post_mcp_jsonrpc(
+                    client, mcp_url, headers, _build_init(alt_ver), rpc_id=1
+                )
     session_id = resp_headers.get("mcp-session-id") or resp_headers.get("Mcp-Session-Id")
     return status, reason, resp_headers, payload, session_id
 
@@ -802,9 +908,11 @@ async def probe_mcp_server(
     mcp_url: str,
     custom_headers: Optional[Dict[str, str]] = None,
     timeout: float = 10.0,
+    *,
+    allow_private: bool = False,
 ) -> Dict[str, Any]:
     """Probe an MCP endpoint (Streamable HTTP + HTTP+SSE fallback) and discover tools/auth."""
-    url = validate_mcp_url(mcp_url)
+    url = validate_mcp_url(mcp_url, allow_private=allow_private)
     headers = _base_mcp_headers(custom_headers)
 
     result: Dict[str, Any] = {
@@ -817,6 +925,8 @@ async def probe_mcp_server(
         "signin_provider_status": "Skipped",
         "detected_auth": "none",
         "can_continue_manually": True,
+        "handshake_ok": False,
+        "transport": None,
         "server_info": None,
         "tools": [],
         "oauth_metadata": None,
@@ -876,6 +986,8 @@ async def probe_mcp_server(
                         init_r = sse_res.get(1, {}).get("result")
                         if isinstance(init_r, dict):
                             result["server_info"] = init_r.get("serverInfo")
+                            result["handshake_ok"] = True
+                            result["transport"] = "sse"
                         tools_r = sse_res.get(2, {}).get("result")
                         if isinstance(tools_r, dict) and isinstance(tools_r.get("tools"), list):
                             result["tools"] = [
@@ -887,6 +999,8 @@ async def probe_mcp_server(
                         pass
                 elif payload and isinstance(payload.get("result"), dict):
                     result["server_info"] = payload["result"].get("serverInfo")
+                    result["handshake_ok"] = True
+                    result["transport"] = "streamable_http"
                     try:
                         rpc_headers = dict(headers)
                         if session_id:
@@ -930,9 +1044,11 @@ async def connect_and_list_mcp_tools(
     mcp_url: str,
     custom_headers: Optional[Dict[str, str]] = None,
     timeout: float = 12.0,
+    *,
+    allow_private: bool = False,
 ) -> Dict[str, Any]:
     """Connect to a personal MCP server (Streamable HTTP or HTTP+SSE) and list tools."""
-    url = validate_mcp_url(mcp_url)
+    url = validate_mcp_url(mcp_url, allow_private=allow_private)
     headers = _base_mcp_headers(custom_headers)
 
     try:
@@ -1061,9 +1177,11 @@ async def call_mcp_tool(
     arguments: Dict[str, Any],
     custom_headers: Optional[Dict[str, str]] = None,
     timeout: float = 25.0,
+    *,
+    allow_private: bool = False,
 ) -> str:
     """Invoke a remote MCP tool, reusing pooled HTTP connections and valid MCP sessions."""
-    url = validate_mcp_url(mcp_url)
+    url = validate_mcp_url(mcp_url, allow_private=allow_private)
     headers = _base_mcp_headers(custom_headers)
     client = _get_shared_mcp_http_client()
     cache_key = _mcp_session_cache_key(url, headers)

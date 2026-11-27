@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import connector_registry
+import oauth_providers
 from credential_vault import CredentialUnrecoverableError, CredentialVault
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -58,42 +60,72 @@ GITHUB_MCP_CONNECTOR: Dict[str, Any] = {
     "configFields": [],
 }
 
+def _enrich_builtin_connectors() -> None:
+    google_ok = oauth_providers.is_provider_oauth_configured("google")
+    google_spec = oauth_providers.get_provider_oauth_spec("google")
+    GMAIL_MCP_CONNECTOR.update({
+        "provider": "google",
+        "source": "orbit_adapter",
+        "source_type": "builtin",
+        "implementation_type": "orbit_adapter",
+        "transport": "in_process",
+        "authentication": "oauth2",
+        "oauth_provider_key": "google",
+        "supports_dynamic_registration": False,
+        "verification_status": "auth_required" if google_ok else "setup_required",
+        "support_status": "active" if google_ok else "setup_required",
+        "verification_notes": (
+            "Co-hosted Orbit Gmail MCP adapter with per-user Google OAuth."
+            if google_ok
+            else (google_spec.setup_instructions if google_spec else "Requires Google OAuth credentials.")
+        ),
+        "setup_instructions": None if google_ok else (google_spec.setup_instructions if google_spec else None),
+    })
+
+    github_ok = oauth_providers.is_provider_oauth_configured("github")
+    github_spec = oauth_providers.get_provider_oauth_spec("github")
+    GITHUB_MCP_CONNECTOR.update({
+        "provider": "github",
+        "source": "official",
+        "source_type": "builtin",
+        "implementation_type": "mcp_server",
+        "transport": "streamable_http",
+        "authentication": "oauth2",
+        "oauth_provider_key": "github",
+        "supports_dynamic_registration": False,
+        "verification_status": "auth_required" if github_ok else "setup_required",
+        "support_status": "active" if github_ok else "setup_required",
+        "verification_notes": (
+            "Official GitHub MCP integration with per-user OAuth."
+            if github_ok
+            else (github_spec.setup_instructions if github_spec else "Requires GitHub OAuth credentials.")
+        ),
+        "setup_instructions": None if github_ok else (github_spec.setup_instructions if github_spec else None),
+    })
+
+
 AVAILABLE_CONNECTORS: List[Dict[str, Any]] = [GMAIL_MCP_CONNECTOR, GITHUB_MCP_CONNECTOR]
 
 MARKETPLACE_MCPS_PATH = BASE_DIR / "data" / "marketplace_mcps.json"
 
 
 def _load_marketplace_mcps() -> None:
-    if not MARKETPLACE_MCPS_PATH.is_file():
-        return
-    try:
-        entries = json.loads(MARKETPLACE_MCPS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    if not isinstance(entries, list):
-        return
+    _enrich_builtin_connectors()
+    manifests = connector_registry.load_marketplace_manifests()
     existing_ids = {c["id"] for c in AVAILABLE_CONNECTORS}
-    for entry in entries:
-        if not isinstance(entry, dict):
+    for manifest in manifests:
+        if manifest.id in existing_ids:
             continue
-        cid = str(entry.get("id") or "").strip()
-        mcp_url = str(entry.get("mcpUrl") or "").strip()
-        if not cid or not mcp_url or cid in existing_ids:
-            continue
-        existing_ids.add(cid)
-        AVAILABLE_CONNECTORS.append({
-            "id": cid,
-            "name": str(entry.get("name") or cid),
-            "category": "MCP Directory",
-            "description": str(entry.get("description") or ""),
-            "icon": "plug",
-            "badge": "MCP",
-            "authType": "Remote MCP",
-            "mcpUrl": mcp_url,
-            "website": str(entry.get("website") or mcp_url),
-            "capabilities": ["Remote MCP Tools"],
-            "configFields": [],
-        })
+        existing_ids.add(manifest.id)
+        AVAILABLE_CONNECTORS.append(connector_registry.manifest_to_connector_dict(manifest))
+
+
+def reload_marketplace_connectors() -> int:
+    """Reload built-in and registry connectors (e.g., after verification)."""
+    AVAILABLE_CONNECTORS.clear()
+    AVAILABLE_CONNECTORS.extend([GMAIL_MCP_CONNECTOR, GITHUB_MCP_CONNECTOR])
+    _load_marketplace_mcps()
+    return len(AVAILABLE_CONNECTORS)
 
 
 _load_marketplace_mcps()
@@ -334,9 +366,10 @@ def list_connectors_with_status(
             except Exception:
                 pass
 
+        personal_conn: Optional[Dict[str, Any]] = None
         if conn.get("mcpUrl") and user_id:
-            personal = personal_by_marketplace_id.get(conn_id)
-            is_connected_remote = bool(personal and personal.get("is_connected"))
+            personal_conn = personal_by_marketplace_id.get(conn_id)
+            is_connected_remote = bool(personal_conn and personal_conn.get("is_connected"))
             is_enabled = is_connected_remote
             is_authenticated = is_connected_remote
         else:
@@ -345,15 +378,22 @@ def list_connectors_with_status(
                 if oauth_provider
                 else True
             )
-        status = (
-            "active"
-            if (is_enabled and is_configured and is_authenticated and not reconnect_required)
-            else (
-                "needs_auth"
-                if (is_enabled and not is_authenticated)
-                else ("needs_config" if is_enabled else "available")
-            )
-        )
+
+        ver_status = str(conn.get("verification_status") or "auth_required")
+        if is_enabled and is_configured and is_authenticated and not reconnect_required:
+            status = "active"
+        elif ver_status in ("unsupported", "deprecated", "package_available"):
+            status = ver_status
+        elif is_enabled and (not is_authenticated or reconnect_required):
+            status = "needs_auth"
+        elif is_enabled and not is_configured:
+            status = "needs_config"
+        elif ver_status == "setup_required":
+            status = "setup_required"
+        elif ver_status == "unverified":
+            status = "unverified"
+        else:
+            status = "available"
 
         # Mask password fields
         masked_config: dict[str, Any] = {}
@@ -365,6 +405,7 @@ def list_connectors_with_status(
                 else:
                     masked_config[f["key"]] = val
 
+        discovered_tools = (personal_conn.get("tools") or []) if personal_conn else []
         results.append({
             **conn,
             "type": "connector",
@@ -376,6 +417,11 @@ def list_connectors_with_status(
             "reconnect_required": reconnect_required,
             "reconnect_message": reconnect_message,
             "config": masked_config,
+            "tool_count": len(discovered_tools) if personal_conn else None,
+            "tools": discovered_tools if personal_conn else [],
+            "last_checked_at": personal_conn.get("last_checked_at") if personal_conn else None,
+            "last_status_code": personal_conn.get("last_status_code") if personal_conn else None,
+            "personal_connector_id": personal_conn.get("id") if personal_conn else None,
         })
 
     return results
