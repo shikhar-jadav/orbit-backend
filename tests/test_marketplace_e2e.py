@@ -131,7 +131,7 @@ def test_marketplace_e2e_lifecycle_and_user_isolation(monkeypatch):
             body = json.loads(request.content.decode("utf-8"))
             method = body.get("method")
             if method == "initialize":
-                return httpx.Response(200, headers={"Mcp-Session-Id": "s-notion-1"}, json={"jsonrpc": "2.0", "id": body["id"], "result": {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "Notion"}}})
+                return httpx.Response(200, headers={"Mcp-Session-Id": "s-notion-1"}, json={"jsonrpc": "2.0", "id": body["id"], "result": {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "Notion", "version": "1.0"}}})
             if method == "notifications/initialized":
                 return httpx.Response(202)
             if method == "tools/list":
@@ -143,9 +143,7 @@ def test_marketplace_e2e_lifecycle_and_user_isolation(monkeypatch):
     transport = httpx.MockTransport(handler)
     real_async_client = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_async_client(transport=transport, **{k: v for k, v in kw.items() if k != "transport"}))
-    mcp_client._SHARED_MCP_HTTP_CLIENT = real_async_client(transport=transport)
     mcp_client._DYN_REG_CACHE.clear()
-    mcp_client._MCP_SESSION_CACHE.clear()
 
     try:
         client = TestClient(server.app)

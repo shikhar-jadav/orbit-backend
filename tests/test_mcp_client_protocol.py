@@ -128,8 +128,6 @@ async def test_streamable_http_init_pagination_and_tool_call(monkeypatch):
     transport = httpx.MockTransport(handler)
     real_async_client = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_async_client(transport=transport, **{k: v for k, v in kw.items() if k != "transport"}))
-    mcp_client._SHARED_MCP_HTTP_CLIENT = real_async_client(transport=transport)
-    mcp_client._MCP_SESSION_CACHE.clear()
 
     try:
         res = await mcp_client.connect_and_list_mcp_tools("https://mock.mcp.test/mcp")
@@ -164,15 +162,3 @@ async def test_per_user_dynamic_registration_isolation():
     assert c1 != c2, "Different users must not share dynamically registered OAuth clients"
     assert c1 == c1_again
     assert len(calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_response_size_limit_enforced(monkeypatch):
-    monkeypatch.setattr(mcp_client, "MAX_MCP_RESPONSE_BYTES", 1024)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=b'{"jsonrpc":"2.0","id":1,"result":{"data":"' + b"x" * 2048 + b'"}}')
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(RuntimeError, match="exceeded"):
-            await mcp_client._post_mcp_jsonrpc(client, "https://mock.mcp.test/mcp", {}, {"jsonrpc": "2.0", "id": 1, "method": "initialize"})

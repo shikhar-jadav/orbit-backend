@@ -16,73 +16,10 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 
-MCP_PROTOCOL_VERSION = "2025-03-26"
-MCP_PROTOCOL_FALLBACK = "2024-11-05"
-
-# Keep outbound HTTP connections alive between tool invocations. MCP tool calls
-# often target the same server repeatedly; a fresh client per call discards the
-# TCP/TLS connection pool every time.
-_SHARED_MCP_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
-_SHARED_MCP_HTTP_CLIENT_LOCK = Lock()
-_MCP_SESSION_CACHE: Dict[str, Tuple[str, float]] = {}
-_MCP_SESSION_CACHE_TTL_SECONDS = 180.0
-
-
-def _get_shared_mcp_http_client() -> httpx.AsyncClient:
-    global _SHARED_MCP_HTTP_CLIENT
-    with _SHARED_MCP_HTTP_CLIENT_LOCK:
-        if _SHARED_MCP_HTTP_CLIENT is None or _SHARED_MCP_HTTP_CLIENT.is_closed:
-            _SHARED_MCP_HTTP_CLIENT = httpx.AsyncClient(
-                timeout=25.0,
-                follow_redirects=True,
-                limits=httpx.Limits(
-                    max_connections=40,
-                    max_keepalive_connections=20,
-                    keepalive_expiry=30.0,
-                ),
-            )
-        return _SHARED_MCP_HTTP_CLIENT
-
 
 async def close_shared_mcp_http_client() -> None:
-    """Close the shared MCP connection pool during application shutdown."""
-    global _SHARED_MCP_HTTP_CLIENT
-    with _SHARED_MCP_HTTP_CLIENT_LOCK:
-        client = _SHARED_MCP_HTTP_CLIENT
-        _SHARED_MCP_HTTP_CLIENT = None
-        _MCP_SESSION_CACHE.clear()
-    if client is not None and not client.is_closed:
-        await client.aclose()
-
-
-def _mcp_session_cache_key(url: str, headers: Dict[str, str]) -> str:
-    # Hash all headers, including Authorization, so credentials never appear in
-    # cache keys, diagnostic output, or logs. Different users/tokens never share a session.
-    header_fingerprint = json.dumps(
-        sorted((str(key).lower(), str(value)) for key, value in headers.items()),
-        separators=(",", ":"),
-    )
-    digest = hashlib.sha256(header_fingerprint.encode("utf-8")).hexdigest()
-    return hashlib.sha256(f"{url}|{digest}".encode("utf-8")).hexdigest()
-
-
-def _get_cached_mcp_session(cache_key: str) -> Optional[str]:
-    cached = _MCP_SESSION_CACHE.get(cache_key)
-    if not cached:
-        return None
-    session_id, expires_at = cached
-    if time.monotonic() >= expires_at:
-        _MCP_SESSION_CACHE.pop(cache_key, None)
-        return None
-    return session_id
-
-
-def _cache_mcp_session(cache_key: str, session_id: Optional[str]) -> None:
-    if session_id:
-        _MCP_SESSION_CACHE[cache_key] = (
-            str(session_id),
-            time.monotonic() + _MCP_SESSION_CACHE_TTL_SECONDS,
-        )
+    """No-op shutdown hook; langchain-mcp-adapters manages per-session HTTP clients."""
+    return None
 
 
 READ_ONLY_TOOL_PREFIXES = (
@@ -631,277 +568,100 @@ async def revoke_mcp_oauth_token(
         return False
 
 
-def _extract_rpc_error(payload: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not payload or "error" not in payload or not payload["error"]:
-        return None
-    err = payload["error"]
-    if isinstance(err, dict):
-        return str(err.get("message") or err.get("code") or "MCP server returned JSON-RPC error.")
-    return str(err)
+
+from datetime import timedelta
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
 
 
-async def _post_mcp_jsonrpc(
-    client: httpx.AsyncClient,
-    mcp_url: str,
-    headers: Dict[str, str],
-    body: Dict[str, Any],
-    *,
-    rpc_id: Optional[Any] = None,
-    timeout: Optional[float] = None,
-) -> Tuple[int, str, httpx.Headers, Optional[Dict[str, Any]]]:
-    """POST JSON-RPC via Streamable HTTP without hanging on open text/event-stream responses."""
-    request_options = {"timeout": timeout} if timeout is not None else {}
-    async with client.stream(
-        "POST", mcp_url, headers=headers, json=body, **request_options
-    ) as resp:
-        status = resp.status_code
-        reason = resp.reason_phrase or f"HTTP {status}"
-        ctype = (resp.headers.get("content-type") or "").lower()
-
-        if status >= 400 or "text/event-stream" not in ctype:
-            chunks: List[bytes] = []
-            total = 0
-            async for chunk in resp.aiter_bytes():
-                total += len(chunk)
-                if total > MAX_MCP_RESPONSE_BYTES:
-                    raise RuntimeError(
-                        f"MCP server response exceeded {MAX_MCP_RESPONSE_BYTES // (1024 * 1024)} MB limit."
-                    )
-                chunks.append(chunk)
-            text = b"".join(chunks).decode("utf-8", errors="replace")
-            return status, reason, resp.headers, parse_mcp_text(text, ctype)
-
-        last_obj: Optional[Dict[str, Any]] = None
-        async for line in resp.aiter_lines():
-            stripped = line.strip()
-            if not stripped.startswith("data:"):
-                continue
-            raw_data = stripped[5:].strip()
-            if not raw_data or raw_data == "[DONE]":
-                continue
-            try:
-                obj = json.loads(raw_data)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(obj, dict):
-                continue
-            last_obj = obj
-            if rpc_id is not None and obj.get("id") != rpc_id:
-                continue
-            if "result" in obj or "error" in obj:
-                return status, reason, resp.headers, obj
-        return status, reason, resp.headers, last_obj
+def _unwrap_mcp_exception(exc: BaseException) -> Tuple[Optional[int], str, Optional[httpx.Response]]:
+    """Extract HTTP status code, message, and response from nested ExceptionGroups."""
+    stack: List[BaseException] = [exc]
+    while stack:
+        cur = stack.pop(0)
+        if isinstance(cur, BaseExceptionGroup):
+            stack.extend(cur.exceptions)
+            continue
+        if isinstance(cur, httpx.HTTPStatusError):
+            resp = cur.response
+            return resp.status_code, str(cur), resp
+        if isinstance(cur, httpx.TimeoutException):
+            return None, "Timed out while connecting to the MCP server.", None
+        if isinstance(cur, httpx.RequestError):
+            return None, f"Could not connect: {cur}", None
+        cause = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        if cause is not None:
+            stack.append(cause)
+    return None, str(exc), None
 
 
-async def _probe_legacy_sse_endpoint(
-    client: httpx.AsyncClient,
+def _build_mcp_connection(
     url: str,
     headers: Dict[str, str],
-) -> Tuple[int, str, httpx.Headers, Optional[str]]:
-    """Safely inspect an SSE endpoint without blocking forever on open event streams."""
-    sse_headers = dict(headers)
-    sse_headers["Accept"] = "text/event-stream"
-    async with client.stream("GET", url, headers=sse_headers) as resp:
-        status = resp.status_code
-        reason = resp.reason_phrase or f"HTTP {status}"
-        ctype = (resp.headers.get("content-type") or "").lower()
-        if status >= 400 or "text/event-stream" not in ctype:
-            await resp.aread()
-            return status, reason, resp.headers, None
-
-        current_event = ""
-        try:
-            async with asyncio.timeout(3.0):
-                async for line in resp.aiter_lines():
-                    stripped = line.strip()
-                    if not stripped:
-                        current_event = ""
-                        continue
-                    if stripped.startswith("event:"):
-                        current_event = stripped[6:].strip()
-                    elif stripped.startswith("data:") and current_event == "endpoint":
-                        rel = stripped[5:].strip()
-                        if rel:
-                            return status, reason, resp.headers, urljoin(url, rel)
-        except TimeoutError:
-            pass
-        return status, reason, resp.headers, None
-
-
-async def _init_streamable_session(
-    client: httpx.AsyncClient,
-    mcp_url: str,
-    headers: Dict[str, str],
-) -> Tuple[int, str, httpx.Headers, Optional[Dict[str, Any]], Optional[str]]:
-    def _build_init(proto_ver: str) -> Dict[str, Any]:
+    transport: str,
+    timeout: float,
+) -> Dict[str, Any]:
+    if transport == "sse":
         return {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": proto_ver,
-                "capabilities": {},
-                "clientInfo": {"name": "orbit-agent-studio", "version": "1.0.0"},
-            },
+            "transport": "sse",
+            "url": url,
+            "headers": headers,
+            "timeout": float(timeout),
+            "sse_read_timeout": max(float(timeout), 30.0),
         }
-
-    status, reason, resp_headers, payload = await _post_mcp_jsonrpc(
-        client, mcp_url, headers, _build_init(MCP_PROTOCOL_VERSION), rpc_id=1
-    )
-    # Negotiate protocol version if server explicitly lists supported versions in -32602 error
-    if status == 400 and isinstance(payload, dict) and isinstance(payload.get("error"), dict):
-        err_data = payload["error"].get("data")
-        supported = err_data.get("supported") if isinstance(err_data, dict) else None
-        if isinstance(supported, list) and supported:
-            alt_ver = str(supported[0]).strip()
-            if alt_ver and alt_ver != MCP_PROTOCOL_VERSION:
-                status, reason, resp_headers, payload = await _post_mcp_jsonrpc(
-                    client, mcp_url, headers, _build_init(alt_ver), rpc_id=1
-                )
-    session_id = resp_headers.get("mcp-session-id") or resp_headers.get("Mcp-Session-Id")
-    return status, reason, resp_headers, payload, session_id
+    return {
+        "transport": "streamable_http",
+        "url": url,
+        "headers": headers,
+        "timeout": timedelta(seconds=float(timeout)),
+        "sse_read_timeout": timedelta(seconds=max(float(timeout), 30.0)),
+    }
 
 
-async def _fetch_all_tools_streamable(
-    client: httpx.AsyncClient,
-    mcp_url: str,
-    rpc_headers: Dict[str, str],
-) -> Tuple[int, List[Dict[str, Any]], Optional[str]]:
-    tools: List[Dict[str, Any]] = []
-    cursor: Optional[str] = None
-    last_status = 200
-
-    for page in range(5):
-        params: Dict[str, Any] = {"cursor": cursor} if cursor else {}
-        status, reason, _, payload = await _post_mcp_jsonrpc(
-            client,
-            mcp_url,
-            rpc_headers,
-            {"jsonrpc": "2.0", "id": 10 + page, "method": "tools/list", "params": params},
-            rpc_id=10 + page,
-        )
-        last_status = status
-        if status >= 400:
-            return status, tools, f"tools/list failed with HTTP {status} ({reason})."
-        rpc_err = _extract_rpc_error(payload)
-        if rpc_err:
-            return status, tools, rpc_err
-        result = payload.get("result") if isinstance(payload, dict) else None
-        if not isinstance(result, dict):
-            break
-        raw_tools = result.get("tools", [])
-        if isinstance(raw_tools, list):
-            for item in raw_tools:
-                if isinstance(item, dict) and item.get("name"):
-                    tools.append(normalize_mcp_tool(item))
-        next_cursor = result.get("nextCursor")
-        if not next_cursor:
-            break
-        cursor = str(next_cursor)
-
-    return last_status, tools, None
+def _langchain_tool_to_dict(tool: Any) -> Dict[str, Any]:
+    """Convert a LangChain BaseTool from langchain-mcp-adapters into Orbit's tool dict."""
+    raw_schema = getattr(tool, "args_schema", None)
+    if not isinstance(raw_schema, dict):
+        raw_schema = {}
+    meta = getattr(tool, "metadata", None)
+    annotations = meta.get("annotations") if isinstance(meta, dict) else None
+    name = str(getattr(tool, "name", "")).strip()
+    read_only = is_mcp_tool_read_only(name, annotations if isinstance(annotations, dict) else None)
+    return {
+        "name": name,
+        "description": str(getattr(tool, "description", "") or "").strip(),
+        "inputSchema": sanitize_tool_schema(raw_schema),
+        "readOnlyHint": read_only,
+    }
 
 
-async def _legacy_sse_exchange(
-    client: httpx.AsyncClient,
-    sse_url: str,
-    headers: Dict[str, str],
-    rpc_calls: List[Tuple[int, str, Dict[str, Any]]],
-) -> Tuple[int, Dict[int, Dict[str, Any]], Optional[str]]:
-    """Run initialize + subsequent RPCs against an HTTP+SSE (2024-11-05) MCP server."""
-    sse_headers = dict(headers)
-    sse_headers["Accept"] = "text/event-stream"
-    results: Dict[int, Dict[str, Any]] = {}
-
-    async with client.stream("GET", sse_url, headers=sse_headers) as sse_resp:
-        status = sse_resp.status_code
-        reason = sse_resp.reason_phrase or f"HTTP {status}"
-        if status >= 400:
-            await sse_resp.aread()
-            return status, results, f"SSE endpoint returned HTTP {status} ({reason})."
-
-        post_url: Optional[str] = None
-        current_event = ""
-        line_iter = sse_resp.aiter_lines().__aiter__()
-
-        async def _next_event_message() -> Optional[Dict[str, Any]]:
-            nonlocal current_event, post_url
-            async for line in line_iter:
-                stripped = line.strip()
-                if not stripped:
-                    current_event = ""
-                    continue
-                if stripped.startswith("event:"):
-                    current_event = stripped[6:].strip()
-                elif stripped.startswith("data:"):
-                    raw = stripped[5:].strip()
-                    if current_event == "endpoint" and raw and not post_url:
-                        post_url = urljoin(sse_url, raw)
-                        return {"__endpoint__": post_url}
-                    try:
-                        obj = json.loads(raw)
-                        if isinstance(obj, dict):
-                            return obj
-                    except json.JSONDecodeError:
-                        continue
-            return None
-
-        async with asyncio.timeout(10.0):
-            while post_url is None:
-                msg = await _next_event_message()
-                if msg is None:
-                    return 502, results, "SSE stream closed before advertising endpoint."
-
-        assert post_url is not None
-
-        async def _send_and_wait(rpc_id: int, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
-            body = {"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params}
-            p_status, p_reason, _, p_payload = await _post_mcp_jsonrpc(
-                client, post_url, headers, body, rpc_id=rpc_id
-            )
-            if p_status >= 400:
-                raise RuntimeError(f"{method} failed with HTTP {p_status} ({p_reason}).")
-            if p_payload and ("result" in p_payload or "error" in p_payload):
-                return p_payload
-            async with asyncio.timeout(10.0):
-                while True:
-                    msg = await _next_event_message()
-                    if msg is None:
-                        raise RuntimeError("SSE stream closed before response arrived.")
-                    if msg.get("id") == rpc_id and ("result" in msg or "error" in msg):
-                        return msg
-
-        init_payload = await _send_and_wait(
-            1,
-            "initialize",
-            {
-                "protocolVersion": MCP_PROTOCOL_FALLBACK,
-                "capabilities": {},
-                "clientInfo": {"name": "orbit-agent-studio", "version": "1.0.0"},
-            },
-        )
-        results[1] = init_payload
-        rpc_err = _extract_rpc_error(init_payload)
-        if rpc_err:
-            return status, results, rpc_err
-
-        try:
-            await client.post(
-                post_url,
-                headers=headers,
-                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-            )
-        except Exception:
-            pass
-
-        for rpc_id, method, params in rpc_calls:
-            payload = await _send_and_wait(rpc_id, method, params)
-            results[rpc_id] = payload
-            call_err = _extract_rpc_error(payload)
-            if call_err:
-                return status, results, call_err
-
-        return 200, results, None
+def _format_call_tool_result(res: Any) -> str:
+    """Format an MCP CallToolResult returned by ClientSession.call_tool."""
+    content_list = getattr(res, "content", None)
+    is_error = bool(getattr(res, "isError", False))
+    if isinstance(content_list, list) and content_list:
+        parts: List[str] = []
+        for item in content_list:
+            text = getattr(item, "text", None)
+            if text is not None:
+                parts.append(str(text))
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            elif hasattr(item, "model_dump"):
+                parts.append(json.dumps(item.model_dump(), ensure_ascii=False))
+            else:
+                parts.append(str(item))
+        text_out = "\n".join(p for p in parts if p).strip()
+        if is_error:
+            return f"MCP tool error: {text_out or 'Tool reported an error.'}"
+        if text_out:
+            return text_out
+    structured = getattr(res, "structuredContent", None)
+    if structured is not None:
+        return json.dumps(structured, ensure_ascii=False)
+    if is_error:
+        return "MCP tool error: Tool reported an error."
+    return ""
 
 
 async def probe_mcp_server(
@@ -911,7 +671,7 @@ async def probe_mcp_server(
     *,
     allow_private: bool = False,
 ) -> Dict[str, Any]:
-    """Probe an MCP endpoint (Streamable HTTP + HTTP+SSE fallback) and discover tools/auth."""
+    """Probe an MCP endpoint using langchain-mcp-adapters and discover tools/auth."""
     url = validate_mcp_url(mcp_url, allow_private=allow_private)
     headers = _base_mcp_headers(custom_headers)
 
@@ -933,111 +693,83 @@ async def probe_mcp_server(
         "error": None,
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            status, reason, resp_headers, payload, session_id = await _init_streamable_session(
-                client, url, headers
-            )
+    last_exc: Optional[BaseException] = None
+    for transport in ("streamable_http", "sse"):
+        try:
+            client = MultiServerMCPClient({"server": _build_mcp_connection(url, headers, transport, timeout)})
+            async with client.session("server", auto_initialize=False) as session:
+                init_res = await session.initialize()
+                lc_tools = await load_mcp_tools(session)
+                server_info = None
+                if getattr(init_res, "serverInfo", None) is not None:
+                    si = init_res.serverInfo
+                    server_info = si.model_dump() if hasattr(si, "model_dump") else dict(si)
 
-            legacy_endpoint: Optional[str] = None
-            if status == 405:
-                status, reason, resp_headers, legacy_endpoint = await _probe_legacy_sse_endpoint(
-                    client, url, headers
-                )
-
-            result["status_code"] = status
-
-            if status in (401, 403):
                 result["reachable"] = True
+                result["status_code"] = 200
                 result["connect_status"] = "done"
                 result["connect_detail"] = "Done"
-                www_auth = resp_headers.get("www-authenticate", "")
-                result["detected_auth"] = "now"
-                result["signin_settings_status"] = "Detected"
-
-                oauth_meta = await discover_mcp_oauth_metadata(client, url, www_auth)
-                if oauth_meta:
-                    result["oauth_metadata"] = oauth_meta
-                    res_name = oauth_meta.get("resource_name") or (
-                        "Notion" if "notion" in url.lower() else ""
-                    )
-                    result["signin_provider_status"] = (
-                        f"OAuth bearer ({res_name})" if res_name else "OAuth bearer"
-                    )
-                else:
-                    result["signin_provider_status"] = (
-                        "OAuth bearer" if "bearer" in www_auth.lower() else "Auth required"
-                    )
-                return result
-
-            if 200 <= status < 300:
-                result["reachable"] = True
-                result["connect_status"] = "done"
-                result["connect_detail"] = "Done"
-                result["detected_auth"] = "none"
-                result["signin_settings_status"] = "Skipped"
-                result["signin_provider_status"] = "Skipped"
-
-                if legacy_endpoint:
-                    try:
-                        _, sse_res, _ = await _legacy_sse_exchange(
-                            client, url, headers, [(2, "tools/list", {})]
-                        )
-                        init_r = sse_res.get(1, {}).get("result")
-                        if isinstance(init_r, dict):
-                            result["server_info"] = init_r.get("serverInfo")
-                            result["handshake_ok"] = True
-                            result["transport"] = "sse"
-                        tools_r = sse_res.get(2, {}).get("result")
-                        if isinstance(tools_r, dict) and isinstance(tools_r.get("tools"), list):
-                            result["tools"] = [
-                                normalize_mcp_tool(t)
-                                for t in tools_r["tools"]
-                                if isinstance(t, dict) and t.get("name")
-                            ]
-                    except Exception:
-                        pass
-                elif payload and isinstance(payload.get("result"), dict):
-                    result["server_info"] = payload["result"].get("serverInfo")
-                    result["handshake_ok"] = True
-                    result["transport"] = "streamable_http"
-                    try:
-                        rpc_headers = dict(headers)
-                        if session_id:
-                            rpc_headers["Mcp-Session-Id"] = session_id
-                        await client.post(
-                            url,
-                            headers=rpc_headers,
-                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-                        )
-                        _, tools, _ = await _fetch_all_tools_streamable(client, url, rpc_headers)
-                        result["tools"] = tools
-                    except Exception:
-                        pass
+                result["handshake_ok"] = True
+                result["transport"] = transport
+                result["server_info"] = server_info
+                result["tools"] = [_langchain_tool_to_dict(t) for t in lc_tools if getattr(t, "name", None)]
 
                 try:
-                    oauth_resp = await client.get(_protected_resource_url(url), timeout=3.0)
-                    if oauth_resp.status_code == 200 and "authorization_servers" in oauth_resp.text:
-                        result["signin_settings_status"] = "Available"
-                        result["signin_provider_status"] = "OAuth optional"
-                        result["detected_auth"] = "later"
+                    async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as http_client:
+                        oauth_resp = await http_client.get(_protected_resource_url(url), timeout=3.0)
+                        if oauth_resp.status_code == 200 and "authorization_servers" in oauth_resp.text:
+                            result["signin_settings_status"] = "Available"
+                            result["signin_provider_status"] = "OAuth optional"
+                            result["detected_auth"] = "later"
                 except Exception:
                     pass
-
                 return result
-
-            result["connect_detail"] = reason
-            result["error"] = f"Server returned HTTP {status} ({reason})."
+        except BaseException as exc:
+            last_exc = exc
+            status, msg, resp = _unwrap_mcp_exception(exc)
+            if status == 405 and transport == "streamable_http":
+                continue
+            if status in (401, 403):
+                result["status_code"] = status
+                result["reachable"] = True
+                result["connect_status"] = "done"
+                result["connect_detail"] = "Done"
+                www_auth = resp.headers.get("www-authenticate", "") if resp is not None else ""
+                result["detected_auth"] = "now"
+                result["signin_settings_status"] = "Detected"
+                try:
+                    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as http_client:
+                        oauth_meta = await discover_mcp_oauth_metadata(http_client, url, www_auth)
+                except Exception:
+                    oauth_meta = None
+                if oauth_meta:
+                    result["oauth_metadata"] = oauth_meta
+                    res_name = oauth_meta.get("resource_name") or ("Notion" if "notion" in url.lower() else "")
+                    result["signin_provider_status"] = f"OAuth bearer ({res_name})" if res_name else "OAuth bearer"
+                else:
+                    result["signin_provider_status"] = "OAuth bearer" if "bearer" in www_auth.lower() else "Auth required"
+                return result
+            if status is not None:
+                result["status_code"] = status
+                reason = resp.reason_phrase if resp is not None else str(status)
+                result["connect_detail"] = reason
+                result["error"] = f"Server returned HTTP {status} ({reason})."
+                return result
+            if "Timed out" in msg:
+                result["connect_detail"] = "Timed out"
+                result["error"] = msg
+                return result
+            if transport == "streamable_http":
+                continue
+            result["connect_detail"] = "Connection failed"
+            result["error"] = msg
             return result
 
-    except httpx.TimeoutException:
-        result["connect_detail"] = "Timed out"
-        result["error"] = "Timed out while connecting to the MCP server."
-        return result
-    except httpx.RequestError as err:
+    if last_exc is not None:
+        _, msg, _ = _unwrap_mcp_exception(last_exc)
         result["connect_detail"] = "Connection failed"
-        result["error"] = f"Could not connect: {err}"
-        return result
+        result["error"] = msg
+    return result
 
 
 async def connect_and_list_mcp_tools(
@@ -1047,41 +779,20 @@ async def connect_and_list_mcp_tools(
     *,
     allow_private: bool = False,
 ) -> Dict[str, Any]:
-    """Connect to a personal MCP server (Streamable HTTP or HTTP+SSE) and list tools."""
+    """Connect to a remote MCP server via langchain-mcp-adapters and list tools."""
     url = validate_mcp_url(mcp_url, allow_private=allow_private)
     headers = _base_mcp_headers(custom_headers)
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            status, reason, _, init_payload, session_id = await _init_streamable_session(
-                client, url, headers
-            )
-
-            if status == 405:
-                sse_status, sse_res, sse_err = await _legacy_sse_exchange(
-                    client, url, headers, [(2, "tools/list", {})]
-                )
-                if sse_status in (401, 403):
-                    return {
-                        "ok": False,
-                        "status_code": sse_status,
-                        "tools": [],
-                        "error": "Authentication rejected by MCP server. Configure credentials or request headers.",
-                    }
-                if sse_err:
-                    return {"ok": False, "status_code": sse_status, "tools": [], "error": sse_err}
-                raw_tools = (
-                    sse_res.get(2, {}).get("result", {}).get("tools", [])
-                    if isinstance(sse_res.get(2, {}).get("result"), dict)
-                    else []
-                )
-                tools = [
-                    normalize_mcp_tool(t)
-                    for t in raw_tools
-                    if isinstance(t, dict) and t.get("name")
-                ]
-                return {"ok": True, "status_code": sse_status, "tools": tools, "error": None}
-
+    for transport in ("streamable_http", "sse"):
+        try:
+            client = MultiServerMCPClient({"server": _build_mcp_connection(url, headers, transport, timeout)})
+            lc_tools = await client.get_tools()
+            tools = [_langchain_tool_to_dict(t) for t in lc_tools if getattr(t, "name", None)]
+            return {"ok": True, "status_code": 200, "tools": tools, "error": None}
+        except BaseException as exc:
+            status, msg, resp = _unwrap_mcp_exception(exc)
+            if status == 405 and transport == "streamable_http":
+                continue
             if status in (401, 403):
                 return {
                     "ok": False,
@@ -1089,86 +800,19 @@ async def connect_and_list_mcp_tools(
                     "tools": [],
                     "error": "Authentication rejected by MCP server. Configure credentials or request headers.",
                 }
-            if status >= 400:
+            if status is not None:
+                reason = resp.reason_phrase if resp is not None else str(status)
                 return {
                     "ok": False,
                     "status_code": status,
                     "tools": [],
                     "error": f"Unable to connect ({status} {reason}).",
                 }
+            if transport == "streamable_http":
+                continue
+            return {"ok": False, "status_code": None, "tools": [], "error": msg}
 
-            init_err = _extract_rpc_error(init_payload)
-            if init_err:
-                return {"ok": False, "status_code": status, "tools": [], "error": init_err}
-
-            rpc_headers = dict(headers)
-            if session_id:
-                rpc_headers["Mcp-Session-Id"] = session_id
-
-            if init_payload and isinstance(init_payload.get("result"), dict):
-                try:
-                    await client.post(
-                        url,
-                        headers=rpc_headers,
-                        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-                    )
-                except Exception:
-                    pass
-
-            tools_status, tools, tools_err = await _fetch_all_tools_streamable(
-                client, url, rpc_headers
-            )
-            if tools_err:
-                return {
-                    "ok": False,
-                    "status_code": tools_status,
-                    "tools": [],
-                    "error": tools_err,
-                }
-
-            return {
-                "ok": True,
-                "status_code": tools_status if tools_status < 400 else status,
-                "tools": tools,
-                "error": None,
-            }
-    except Exception as err:
-        return {
-            "ok": False,
-            "status_code": None,
-            "tools": [],
-            "error": str(err),
-        }
-
-
-def _format_mcp_call_payload(payload: Optional[Dict[str, Any]], raw_fallback: str = "") -> str:
-    if not payload:
-        return raw_fallback.strip()
-    rpc_err = _extract_rpc_error(payload)
-    if rpc_err:
-        return f"MCP tool error: {rpc_err}"
-
-    result = payload.get("result")
-    if isinstance(result, dict):
-        content_list = result.get("content")
-        if isinstance(content_list, list):
-            parts: List[str] = []
-            for item in content_list:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    parts.append(str(item.get("text", "")))
-                elif isinstance(item, dict):
-                    parts.append(json.dumps(item, ensure_ascii=False))
-                else:
-                    parts.append(str(item))
-            text_out = "\n".join(p for p in parts if p).strip()
-            if result.get("isError"):
-                return f"MCP tool error: {text_out or 'Tool reported an error.'}"
-            if text_out:
-                return text_out
-        if result.get("structuredContent") is not None:
-            return json.dumps(result["structuredContent"], ensure_ascii=False)
-        return json.dumps(result, ensure_ascii=False)
-    return json.dumps(payload, ensure_ascii=False)
+    return {"ok": False, "status_code": None, "tools": [], "error": "Unable to connect to MCP server."}
 
 
 async def call_mcp_tool(
@@ -1180,102 +824,27 @@ async def call_mcp_tool(
     *,
     allow_private: bool = False,
 ) -> str:
-    """Invoke a remote MCP tool, reusing pooled HTTP connections and valid MCP sessions."""
+    """Invoke a remote MCP tool via langchain-mcp-adapters."""
     url = validate_mcp_url(mcp_url, allow_private=allow_private)
     headers = _base_mcp_headers(custom_headers)
-    client = _get_shared_mcp_http_client()
-    cache_key = _mcp_session_cache_key(url, headers)
-    tool_payload = {
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": {"name": tool_name, "arguments": arguments},
-    }
 
-    # A server-provided MCP session lets us skip initialize + initialized
-    # notification on subsequent calls. Session keys include a one-way hash of
-    # all headers, so credentials from separate users are isolated.
-    session_id = _get_cached_mcp_session(cache_key)
-    if session_id:
-        session_headers = {**headers, "Mcp-Session-Id": session_id}
-        c_status, c_reason, _, call_payload = await _post_mcp_jsonrpc(
-            client, url, session_headers, tool_payload, rpc_id=3, timeout=timeout
-        )
-        if c_status not in (404, 405, 410):
-            if c_status >= 400:
-                raise RuntimeError(f"MCP tool call failed with HTTP {c_status} ({c_reason})")
-            return _format_mcp_call_payload(call_payload)
-
-        # Do not replay a tool call automatically after an expired session: the
-        # remote server may have performed the action before returning an error.
-        # Re-establish the session for the next tool call and report the current
-        # call as not completed, avoiding accidental duplicate writes/sends.
-        _MCP_SESSION_CACHE.pop(cache_key, None)
+    last_exc: Optional[BaseException] = None
+    for transport in ("streamable_http", "sse"):
         try:
-            status, reason, _, init_payload, replacement_session_id = await _init_streamable_session(
-                client, url, headers
-            )
-            if status == 200 and not _extract_rpc_error(init_payload):
-                if replacement_session_id:
-                    _cache_mcp_session(cache_key, replacement_session_id)
-                    rpc_headers = {**headers, "Mcp-Session-Id": replacement_session_id}
-                else:
-                    rpc_headers = dict(headers)
-                if init_payload and isinstance(init_payload.get("result"), dict):
-                    try:
-                        await client.post(
-                            url,
-                            headers=rpc_headers,
-                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-                            timeout=timeout,
-                        )
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        raise RuntimeError(
-            "MCP session expired. Orbit reconnected the service, but did not repeat this tool action. Please retry it."
-        )
+            client = MultiServerMCPClient({"server": _build_mcp_connection(url, headers, transport, timeout)})
+            async with client.session("server") as session:
+                res = await session.call_tool(tool_name, arguments)
+                return _format_call_tool_result(res)
+        except BaseException as exc:
+            last_exc = exc
+            status, msg, resp = _unwrap_mcp_exception(exc)
+            if status == 405 and transport == "streamable_http":
+                continue
+            if status is not None:
+                reason = resp.reason_phrase if resp is not None else str(status)
+                raise RuntimeError(f"MCP tool call failed with HTTP {status} ({reason})") from exc
+            if transport == "streamable_http":
+                continue
+            raise RuntimeError(msg) from exc
 
-    status, reason, _, init_payload, session_id = await _init_streamable_session(
-        client, url, headers
-    )
-
-    if status == 405:
-        _, sse_res, sse_err = await _legacy_sse_exchange(
-            client,
-            url,
-            headers,
-            [(3, "tools/call", {"name": tool_name, "arguments": arguments})],
-        )
-        if sse_err:
-            return f"MCP tool error: {sse_err}"
-        return _format_mcp_call_payload(sse_res.get(3))
-
-    if status >= 400:
-        raise RuntimeError(f"MCP initialize failed with HTTP {status} ({reason})")
-    init_err = _extract_rpc_error(init_payload)
-    if init_err:
-        raise RuntimeError(f"MCP initialize error: {init_err}")
-
-    rpc_headers = dict(headers)
-    if session_id:
-        rpc_headers["Mcp-Session-Id"] = session_id
-        _cache_mcp_session(cache_key, session_id)
-
-    try:
-        await client.post(
-            url,
-            headers=rpc_headers,
-            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-            timeout=timeout,
-        )
-    except Exception:
-        pass
-
-    c_status, c_reason, _, call_payload = await _post_mcp_jsonrpc(
-        client, url, rpc_headers, tool_payload, rpc_id=3, timeout=timeout
-    )
-    if c_status >= 400:
-        raise RuntimeError(f"MCP tool call failed with HTTP {c_status} ({c_reason})")
-    return _format_mcp_call_payload(call_payload)
+    raise RuntimeError(str(last_exc) if last_exc else "MCP tool call failed.")
