@@ -670,6 +670,8 @@ class ReActAgent:
         active_interrupts: Optional[Dict[str, Any]] = None,
         active_interrupt_owners: Optional[Dict[str, str]] = None,
         force_approval: bool = False,
+        bot_id: Optional[str] = None,
+        bot_instructions: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Asynchronously streams tokens and tool execution events for SSE.
@@ -685,6 +687,50 @@ class ReActAgent:
         """
         # Prepare message history & per-user personal skills / MCP connectors
         active_prompt = get_dynamic_system_prompt(self.system_prompt)
+        memory_user_id = f"{target_user_id}:bot:{bot_id}" if target_user_id and bot_id else target_user_id
+        if bot_instructions:
+            active_prompt += (
+                "\n\n### Bot Identity & Standing Instructions\n"
+                "You are the user's named Orbit bot. Follow these standing instructions for every task, "
+                "while respecting system safety rules, user permissions, and action approvals:\n"
+                + str(bot_instructions).strip()[:12000]
+            )
+        marketplace_catalog: List[Dict[str, Any]] = []
+        if chat_store is not None and target_user_id:
+            try:
+                from marketplace import AVAILABLE_CONNECTORS
+                personal = await asyncio.to_thread(chat_store.get_personal_connectors, target_user_id)
+                personal_by_marketplace_id = {
+                    str((item.get("advanced") or {}).get("marketplace_id") or ""): item
+                    for item in (personal or [])
+                }
+                for connector in AVAILABLE_CONNECTORS:
+                    if not connector.get("mcpUrl"):
+                        continue
+                    linked = personal_by_marketplace_id.get(str(connector.get("id") or ""))
+                    connected = bool(linked and linked.get("is_connected") and not linked.get("reconnect_required"))
+                    marketplace_catalog.append({
+                        "id": str(connector.get("id") or ""),
+                        "name": str(connector.get("name") or connector.get("id") or ""),
+                        "description": str(connector.get("description") or "")[:180],
+                        "status": "connected" if connected else "not_connected",
+                    })
+                if marketplace_catalog:
+                    directory = [
+                        f"- {item['name']} (id: {item['id']}; status: {item['status']})"
+                        for item in marketplace_catalog[:100]
+                    ]
+                    active_prompt += (
+                        "\n\n### Orbit Marketplace MCP Directory\n"
+                        "When a task needs an external service, check this directory. If listed and connected, "
+                        "discover its tools with search_available_tools. If listed but not connected, tell the user "
+                        "which service to connect in Marketplace and ask them to say 'continue' after connecting; "
+                        "do not pretend the task is complete. If no matching service is listed, explain that the "
+                        "required MCP is not currently in Orbit Marketplace.\n"
+                        + "\n".join(directory)
+                    )
+            except Exception as directory_error:
+                print(f"[agent] Marketplace service directory unavailable: {directory_error}")
         mcp_tool_defs: List[Dict[str, Any]] = []
         mcp_tool_handlers: Dict[str, tuple[Dict[str, Any], str, str]] = {}
         all_catalog_tools: Dict[str, Dict[str, Any]] = {}
@@ -699,15 +745,15 @@ class ReActAgent:
                 context_loader = getattr(self.memory_store, "get_agent_context", None)
                 if callable(context_loader):
                     memory_context = await asyncio.wait_for(
-                        asyncio.to_thread(context_loader, target_user_id),
+                        asyncio.to_thread(context_loader, memory_user_id),
                         timeout=2.5,
                     )
                 else:
                     def load_memory_context():
                         return {
-                            "memories": self.memory_store.get_user_memories(target_user_id, limit=10),
-                            "preferences": self.memory_store.get_user_preferences(target_user_id),
-                            "instructions": self.memory_store.get_user_instructions(target_user_id, limit=20),
+                            "memories": self.memory_store.get_user_memories(memory_user_id, limit=10),
+                            "preferences": self.memory_store.get_user_preferences(memory_user_id),
+                            "instructions": self.memory_store.get_user_instructions(memory_user_id, limit=20),
                         }
                     memory_context = await asyncio.wait_for(
                         asyncio.to_thread(load_memory_context),
@@ -773,7 +819,7 @@ class ReActAgent:
                         episodes = await asyncio.wait_for(
                             asyncio.to_thread(
                                 self.memory_store.get_relevant_episodes,
-                                target_user_id,
+                                memory_user_id,
                                 query=q_text,
                                 limit=3,
                             ),
@@ -1182,16 +1228,34 @@ class ReActAgent:
                             by_conn.setdefault(t["connector_name"], []).append(t)
 
                         if not matched:
-                            available_conns = sorted({t["connector_name"] for t in all_catalog_tools.values()})
-                            conn_hint = (
-                                f" Connected integrations: {', '.join(available_conns)}."
-                                if available_conns
-                                else " No external MCP integrations are currently connected."
-                            )
-                            tool_result = (
-                                f"No connected MCP tools matched '{query}'.{conn_hint} "
-                                "Ask the user to connect the required integration in Marketplace or Settings > Connected Accounts."
-                            )
+                            terms = [part for part in re.split(r"[^a-z0-9]+", f"{service_filter} {query}".lower()) if len(part) > 2]
+                            marketplace_matches = [
+                                item for item in marketplace_catalog
+                                if (service_filter and service_filter.lower() in item["name"].lower())
+                                or (terms and any(term in (item["name"] + " " + item["id"] + " " + item["description"]).lower() for term in terms))
+                            ]
+                            if marketplace_matches:
+                                match = marketplace_matches[0]
+                                if match["status"] == "not_connected":
+                                    tool_result = (
+                                        f"Found {match['name']} in Orbit Marketplace (connector id: {match['id']}), "
+                                        "but it is not connected for this user. Tell the user to open Marketplace → Connectors "
+                                        f"and connect {match['name']}. Ask them to say 'continue' after connecting, then resume "
+                                        "the original task in this conversation. Do not claim the task is complete."
+                                    )
+                                else:
+                                    tool_result = (
+                                        f"{match['name']} is connected, but no matching tool was found for '{query}'. "
+                                        "Try a more specific action query or check the connector's available tools."
+                                    )
+                            else:
+                                available_conns = sorted({t["connector_name"] for t in all_catalog_tools.values()})
+                                conn_hint = f" Connected integrations: {', '.join(available_conns)}." if available_conns else ""
+                                tool_result = (
+                                    f"No connected MCP tools matched '{query}', and no matching MCP was found in Orbit Marketplace."
+                                    f"{conn_hint} Tell the user that this service is not currently available in Marketplace, "
+                                    "and offer a built-in or already-connected alternative if one exists."
+                                )
                         else:
                             lines = [f"Loaded {len(matched)} tools:\n", "Matched tools:"]
                             matched_names = {t["bound_name"] for t in matched}
