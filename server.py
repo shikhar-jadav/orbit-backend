@@ -65,6 +65,7 @@ from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 
 import auth
+from bot_store import BotStore
 import marketplace
 import mcp_client
 import connector_registry
@@ -86,6 +87,7 @@ from memory_store import (
     create_memory_store,
     active_user_id_var,
     active_memory_store_var,
+    active_bot_id_var,
 )
 from proactive_engine import (
     ProactiveStore,
@@ -198,6 +200,7 @@ task_store: Optional[TaskStore] = None
 task_engine: Optional[DurableExecutionEngine] = None
 proactive_store: Optional[ProactiveStore] = None
 provider_integration_store: Optional[ProviderIntegrationStore] = None
+bot_store: Optional[BotStore] = None
 proactive_engine: Optional[ProactiveEngine] = None
 
 app = FastAPI(
@@ -301,6 +304,15 @@ def _get_owned_thread_or_404(thread_id: str, current_user: Dict[str, Any]) -> Di
     return thread
 
 
+def _workspace_id_for_thread(thread_id: str, current_user: Dict[str, Any]) -> str:
+    """Bot conversations share that bot's private workspace across its threads."""
+    if bot_store is not None:
+        bot = bot_store.get_bot_for_thread(str(current_user["user_id"]), str(thread_id))
+        if bot:
+            return f"bot_{bot['id']}"
+    return str(thread_id)
+
+
 def _require_owned_thread(thread_id: str, current_user: Dict[str, Any]) -> None:
     if chat_store is None:
         raise RuntimeError("The PostgreSQL application stores are not initialized.")
@@ -339,7 +351,7 @@ if STATIC_DIR.exists():
 def _initialize_application_state() -> None:
     global database, object_storage, chat_store, checkpoint_connection
     global checkpointer, memory_store, provider_manager, embedding_manager, agent, task_store
-    global task_engine, proactive_store, provider_integration_store, proactive_engine
+    global task_engine, proactive_store, provider_integration_store, proactive_engine, bot_store
 
     if database is not None:
         return
@@ -349,6 +361,7 @@ def _initialize_application_state() -> None:
     try:
         database.migrate()
         chat_store = PostgresChatStore(database)
+        bot_store = BotStore(database)
         chat_store.cleanup_empty_threads()
         try:
             object_storage = S3ObjectStorage()
@@ -637,6 +650,74 @@ async def create_thread(
 ):
     title = (request.title if request and request.title else "New chat").strip() or "New chat"
     return chat_store.create_thread(title=title, user_id=current_user["user_id"])
+
+
+class BotCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    instructions: str = Field(..., min_length=1, max_length=12000)
+
+
+class BotUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    instructions: Optional[str] = Field(default=None, min_length=1, max_length=12000)
+
+
+@app.get("/api/bots")
+def list_bots_endpoint(current_user: Dict[str, Any] = Depends(require_user)):
+    if bot_store is None:
+        raise HTTPException(status_code=503, detail="Bot storage is not ready.")
+    return bot_store.list_bots(str(current_user["user_id"]))
+
+
+@app.post("/api/bots", status_code=201)
+def create_bot_endpoint(request: BotCreateRequest, current_user: Dict[str, Any] = Depends(require_user)):
+    if bot_store is None:
+        raise HTTPException(status_code=503, detail="Bot storage is not ready.")
+    try:
+        return bot_store.create_bot(str(current_user["user_id"]), request.name, request.instructions)
+    except UniqueViolation:
+        raise HTTPException(status_code=409, detail="A bot with this name already exists.")
+
+
+@app.patch("/api/bots/{bot_id}")
+def update_bot_endpoint(bot_id: str, request: BotUpdateRequest, current_user: Dict[str, Any] = Depends(require_user)):
+    if bot_store is None:
+        raise HTTPException(status_code=503, detail="Bot storage is not ready.")
+    try:
+        updated = bot_store.update_bot(
+            str(current_user["user_id"]), bot_id, name=request.name, instructions=request.instructions
+        )
+    except UniqueViolation:
+        raise HTTPException(status_code=409, detail="A bot with this name already exists.")
+    if not updated:
+        raise HTTPException(status_code=404, detail="Bot not found.")
+    return updated
+
+
+@app.delete("/api/bots/{bot_id}")
+def delete_bot_endpoint(bot_id: str, current_user: Dict[str, Any] = Depends(require_user)):
+    if bot_store is None:
+        raise HTTPException(status_code=503, detail="Bot storage is not ready.")
+    if not bot_store.delete_bot(str(current_user["user_id"]), bot_id):
+        raise HTTPException(status_code=404, detail="Bot not found.")
+    return {"deleted": True, "bot_id": bot_id}
+
+
+@app.get("/api/bots/{bot_id}/threads/latest")
+def get_latest_bot_thread(bot_id: str, current_user: Dict[str, Any] = Depends(require_user)):
+    if bot_store is None or not bot_store.get_bot(str(current_user["user_id"]), bot_id):
+        raise HTTPException(status_code=404, detail="Bot not found.")
+    return {"thread": bot_store.get_latest_thread(str(current_user["user_id"]), bot_id)}
+
+
+@app.post("/api/bots/{bot_id}/threads", status_code=201)
+def create_bot_thread(bot_id: str, current_user: Dict[str, Any] = Depends(require_user)):
+    if bot_store is None:
+        raise HTTPException(status_code=503, detail="Bot storage is not ready.")
+    thread = bot_store.create_bot_thread(str(current_user["user_id"]), bot_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Bot not found.")
+    return thread
 
 
 @app.get("/threads/{thread_id}")
@@ -5526,6 +5607,8 @@ async def agui_endpoint(
                 chat_store=chat_store,
                 active_interrupts=ACTIVE_CHAT_INTERRUPTS,
                 active_interrupt_owners=ACTIVE_CHAT_INTERRUPT_OWNERS,
+                bot_id=str(bot_config["id"]) if bot_config else None,
+                bot_instructions=str(bot_config["instructions"]) if bot_config else None,
             ):
                 event_type = event.get("type")
                 data = event.get("data", {})
@@ -5833,7 +5916,8 @@ async def get_workspace_files(
 ):
     """List files in the thread's isolated workspace sandbox."""
     _require_owned_thread(thread_id, current_user)
-    return list_workspace_files_fn(path, thread_id=thread_id)
+    workspace_id = _workspace_id_for_thread(thread_id, current_user)
+    return list_workspace_files_fn(path, thread_id=workspace_id)
 
 
 @app.get("/threads/{thread_id}/workspace/events")
@@ -5843,7 +5927,8 @@ async def stream_workspace_changes(
 ):
     """Stream debounced workspace file changes for the thread."""
     _require_owned_thread(thread_id, current_user)
-    subscriber = subscribe_workspace_changes(thread_id)
+    workspace_id = _workspace_id_for_thread(thread_id, current_user)
+    subscriber = subscribe_workspace_changes(workspace_id)
 
     async def event_stream():
         try:
@@ -5855,7 +5940,7 @@ async def stream_workspace_changes(
                     continue
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
-            unsubscribe_workspace_changes(thread_id, subscriber)
+            unsubscribe_workspace_changes(workspace_id, subscriber)
 
     return StreamingResponse(
         event_stream(),
@@ -5874,7 +5959,8 @@ async def get_workspace_file_content(
 ):
     """Read file content with line numbers from the workspace sandbox."""
     _require_owned_thread(thread_id, current_user)
-    return read_workspace_file_fn(path, start_line=start_line, end_line=end_line, thread_id=thread_id)
+    workspace_id = _workspace_id_for_thread(thread_id, current_user)
+    return read_workspace_file_fn(path, start_line=start_line, end_line=end_line, thread_id=workspace_id)
 
 
 @app.get("/threads/{thread_id}/workspace/preview")
@@ -5885,7 +5971,8 @@ async def get_workspace_file_preview(
 ):
     """Returns rich structured preview data across all file types for Universal Canvas."""
     _require_owned_thread(thread_id, current_user)
-    preview_data = get_file_preview_data(path, thread_id=thread_id)
+    workspace_id = _workspace_id_for_thread(thread_id, current_user)
+    preview_data = get_file_preview_data(path, thread_id=workspace_id)
     if "error" in preview_data and not preview_data.get("type"):
         raise HTTPException(status_code=404, detail=preview_data["error"])
     return preview_data
@@ -5900,7 +5987,8 @@ async def get_workspace_raw_file(
     """Serves the raw file inline (for PDFs, video, audio, images)."""
     _require_owned_thread(thread_id, current_user)
     try:
-        safe_path = resolve_safe_path(path, thread_id=thread_id)
+        workspace_id = _workspace_id_for_thread(thread_id, current_user)
+        safe_path = resolve_safe_path(path, thread_id=workspace_id)
         if not safe_path.is_file():
             raise HTTPException(status_code=404, detail="File not found.")
         ext = safe_path.suffix.lower()
@@ -5978,10 +6066,11 @@ async def execute_workspace_command(
 ):
     """Execute a Python script or command inside the thread's workspace."""
     _require_owned_thread(thread_id, current_user)
+    workspace_id = _workspace_id_for_thread(thread_id, current_user)
     return await run_workspace_code_fn(
         request.command_or_file,
         timeout_seconds=request.timeout_seconds,
-        thread_id=thread_id,
+        thread_id=workspace_id,
     )
 
 
@@ -6354,10 +6443,16 @@ async def chat_stream_endpoint(
         raise HTTPException(status_code=422, detail="Enter a message or attach a file.")
 
     user_id = current_user["user_id"]
+    thread_id = request.thread_id
+    bot_config = (
+        bot_store.get_bot_for_thread(str(user_id), str(thread_id))
+        if bot_store is not None and thread_id else None
+    )
     active_user_id_var.set(user_id)
     active_memory_store_var.set(memory_store)
     active_proactive_store_var.set(proactive_store)
-    thread_id = request.thread_id
+    active_bot_id_var.set(str(bot_config["id"]) if bot_config else None)
+    active_thread_id_var.set(f"bot_{bot_config['id']}" if bot_config else (thread_id or "default"))
     user_message_record = None
     user_message = request.message.strip() or "Please review the attached files."
     attachments: list[dict[str, Any]] = []
@@ -6409,7 +6504,7 @@ async def chat_stream_endpoint(
         if request.provider_index is not None
         else settings["provider_index"]
     )
-    if request.thread_id:
+    if request.thread_id and not bot_config:
         active_thread_id_var.set(request.thread_id)
 
     async def event_generator():
