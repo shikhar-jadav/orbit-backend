@@ -47,6 +47,9 @@ active_user_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextV
 active_memory_store_var: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
     "active_memory_store", default=None
 )
+active_bot_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "active_bot_id", default=None
+)
 
 
 def _utc_now() -> str:

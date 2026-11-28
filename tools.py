@@ -222,6 +222,9 @@ def manage_memory(
     import json
     store = active_memory_store_var.get()
     user_id = active_user_id_var.get()
+    from memory_store import active_bot_id_var
+    bot_id = active_bot_id_var.get()
+    memory_owner = f"{user_id}:bot:{bot_id}" if user_id and bot_id else user_id
     if not store or not user_id:
         return json.dumps({"status": "error", "message": "Memory store not available in current session."})
 
@@ -231,7 +234,7 @@ def manage_memory(
         if memory_type == "rule":
             if not text_content:
                 return json.dumps({"status": "error", "message": "content is required when saving a rule."})
-            saved_key = store.save_user_instruction(user_id, text_content, category=category, key=key or None)
+            saved_key = store.save_user_instruction(memory_owner, text_content, category=category, key=key or None)
             return json.dumps({
                 "status": "rule_saved",
                 "key": saved_key,
@@ -245,7 +248,7 @@ def manage_memory(
                 return json.dumps({"status": "error", "message": "task or content is required when saving an episode."})
             tools_list = [t.strip() for t in tools_used.split(",") if t.strip()] if tools_used else []
             saved_key = store.save_episode(
-                user_id,
+                memory_owner,
                 task=task_desc,
                 solution_steps=solution_steps.strip() or "Resolved successfully.",
                 tools_used=tools_list,
@@ -259,7 +262,7 @@ def manage_memory(
 
         elif memory_type == "preference":
             pref_key = key or "general"
-            store.save_user_preference(user_id, pref_key, text_content)
+            store.save_user_preference(memory_owner, pref_key, text_content)
             return json.dumps({
                 "status": "preference_saved",
                 "key": pref_key,
@@ -269,7 +272,7 @@ def manage_memory(
         else:  # default "fact"
             if not text_content:
                 return json.dumps({"status": "error", "message": "fact or content is required when action='save'."})
-            saved_key = store.save_user_memory(user_id, {"fact": text_content}, key=key or None)
+            saved_key = store.save_user_memory(memory_owner, {"fact": text_content}, key=key or None)
             return json.dumps({
                 "status": "memory_saved",
                 "key": saved_key,
@@ -280,51 +283,51 @@ def manage_memory(
         if not key:
             return json.dumps({"status": "error", "message": "key is required when action='update'."})
         if memory_type == "rule":
-            store.save_user_instruction(user_id, text_content, category=category, key=key)
+            store.save_user_instruction(memory_owner, text_content, category=category, key=key)
             return json.dumps({"status": "rule_updated", "key": key, "rule": text_content}, ensure_ascii=False)
         elif memory_type == "episode":
             store.save_episode(
-                user_id,
+                memory_owner,
                 task=task.strip() or text_content,
                 solution_steps=solution_steps.strip(),
                 key=key,
             )
             return json.dumps({"status": "episode_updated", "key": key}, ensure_ascii=False)
         elif memory_type == "preference":
-            store.save_user_preference(user_id, key, text_content)
+            store.save_user_preference(memory_owner, key, text_content)
             return json.dumps({"status": "preference_updated", "key": key, "value": text_content}, ensure_ascii=False)
         else:
-            store.save_user_memory(user_id, {"fact": text_content}, key=key)
+            store.save_user_memory(memory_owner, {"fact": text_content}, key=key)
             return json.dumps({"status": "memory_updated", "key": key, "fact": text_content}, ensure_ascii=False)
 
     elif action == "delete":
         if not key:
             return json.dumps({"status": "error", "message": "key is required when action='delete'."})
         if memory_type == "rule":
-            store.delete_user_instruction(user_id, key)
+            store.delete_user_instruction(memory_owner, key)
             return json.dumps({"status": "rule_deleted", "key": key})
         elif memory_type == "episode":
-            store.delete_episode(user_id, key)
+            store.delete_episode(memory_owner, key)
             return json.dumps({"status": "episode_deleted", "key": key})
         elif memory_type == "preference":
             store.delete((user_id, "preferences"), key)
             return json.dumps({"status": "preference_deleted", "key": key})
         else:
-            store.delete_user_memory(user_id, key)
+            store.delete_user_memory(memory_owner, key)
             return json.dumps({"status": "memory_deleted", "key": key})
 
     elif action == "list":
         if memory_type == "rule":
-            rules = store.get_user_instructions(user_id, limit=limit)
+            rules = store.get_user_instructions(memory_owner, limit=limit)
             return json.dumps({"status": "rules_listed", "count": len(rules), "rules": rules}, ensure_ascii=False, default=str)
         elif memory_type == "episode":
-            episodes = store.get_relevant_episodes(user_id, query="", limit=limit)
+            episodes = store.get_relevant_episodes(memory_owner, query="", limit=limit)
             return json.dumps({"status": "episodes_listed", "count": len(episodes), "episodes": episodes}, ensure_ascii=False, default=str)
         elif memory_type == "preference":
-            prefs = store.get_user_preferences(user_id)
+            prefs = store.get_user_preferences(memory_owner)
             return json.dumps({"status": "preferences_listed", "preferences": prefs}, ensure_ascii=False, default=str)
         else:
-            mems = store.get_user_memories(user_id, limit=limit)
+            mems = store.get_user_memories(memory_owner, limit=limit)
             return json.dumps({"status": "memories_listed", "count": len(mems), "memories": mems}, ensure_ascii=False, default=str)
 
     elif action == "search":
@@ -332,19 +335,19 @@ def manage_memory(
             return json.dumps({"status": "error", "message": "limit must be at least 1."})
 
         if memory_type == "rule":
-            results = store.search((user_id, "instructions"), query=query or None, limit=limit)
+            results = store.search((memory_owner, "instructions"), query=query or None, limit=limit)
             items = [{"key": r.key, "value": r.value} for r in results]
             return json.dumps({"status": "rules_retrieved", "count": len(items), "rules": items}, ensure_ascii=False, default=str)
         elif memory_type == "episode":
-            episodes = store.get_relevant_episodes(user_id, query=query, limit=limit)
+            episodes = store.get_relevant_episodes(memory_owner, query=query, limit=limit)
             return json.dumps({"status": "episodes_retrieved", "count": len(episodes), "episodes": episodes}, ensure_ascii=False, default=str)
         elif memory_type == "preference":
-            prefs = store.get_user_preferences(user_id)
+            prefs = store.get_user_preferences(memory_owner)
             return json.dumps({"status": "preferences_retrieved", "preferences": prefs}, ensure_ascii=False, default=str)
         elif memory_type == "all":
-            all_mems = store.get_user_memories(user_id, limit=limit)
-            all_rules = store.get_user_instructions(user_id, limit=limit)
-            all_eps = store.get_relevant_episodes(user_id, query=query, limit=limit)
+            all_mems = store.get_user_memories(memory_owner, limit=limit)
+            all_rules = store.get_user_instructions(memory_owner, limit=limit)
+            all_eps = store.get_relevant_episodes(memory_owner, query=query, limit=limit)
             return json.dumps({
                 "status": "all_memory_retrieved",
                 "memories": all_mems,
@@ -353,10 +356,10 @@ def manage_memory(
             }, ensure_ascii=False, default=str)
         else:
             if query:
-                memories = store.search((user_id, "memories"), query=query, limit=limit)
+                memories = store.search((memory_owner, "memories"), query=query, limit=limit)
                 items = [{"key": memory.key, "value": memory.value} for memory in memories]
             else:
-                items = store.get_user_memories(user_id, limit=limit)
+                items = store.get_user_memories(memory_owner, limit=limit)
             return json.dumps({
                 "status": "memories_retrieved",
                 "count": len(items),
