@@ -5851,7 +5851,7 @@ async def list_thread_artifacts(
             },
             "source": "workspace_file",
         }
-        for artifact in list_workspace_artifacts(thread_id)
+        for artifact in list_workspace_artifacts(_workspace_id_for_thread(thread_id, current_user))
     ]
     legacy_artifacts = [
         {**artifact, "source": "legacy"}
@@ -6019,7 +6019,8 @@ async def serve_workspace_asset(
     """Serve a workspace file and relative assets for sandboxed HTML previews."""
     _require_owned_thread(thread_id, current_user)
     try:
-        safe_path = resolve_safe_path(file_path, thread_id=thread_id)
+        workspace_id = _workspace_id_for_thread(thread_id, current_user)
+        safe_path = resolve_safe_path(file_path, thread_id=workspace_id)
         if not safe_path.is_file():
             raise HTTPException(status_code=404, detail="File not found.")
         headers = {"X-Content-Type-Options": "nosniff"}
@@ -6046,7 +6047,8 @@ async def download_workspace_file(
     """Direct attachment download for workspace files."""
     _require_owned_thread(thread_id, current_user)
     try:
-        safe_path = resolve_safe_path(path, thread_id=thread_id)
+        workspace_id = _workspace_id_for_thread(thread_id, current_user)
+        safe_path = resolve_safe_path(path, thread_id=workspace_id)
         if not safe_path.is_file():
             raise HTTPException(status_code=404, detail="File not found.")
         return FileResponse(
