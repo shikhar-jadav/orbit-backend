@@ -310,7 +310,7 @@ def manage_memory(
             store.delete_episode(memory_owner, key)
             return json.dumps({"status": "episode_deleted", "key": key})
         elif memory_type == "preference":
-            store.delete((user_id, "preferences"), key)
+            store.delete((memory_owner, "preferences"), key)
             return json.dumps({"status": "preference_deleted", "key": key})
         else:
             store.delete_user_memory(memory_owner, key)
